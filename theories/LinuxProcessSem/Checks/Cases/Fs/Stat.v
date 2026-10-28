@@ -68,6 +68,47 @@ Example readlinkat_proc_self_exe_effects :
        = CheckOk statat_absent_model [].
 Proof. vm_compute. repeat split; reflexivity. Qed.
 
+(** The size is a signed int in the Linux syscall.  Zero wins before an
+    invalid path pointer, and high register bits are discarded. *)
+Definition readlinkat_zero_size_input : SyscallInput :=
+  mkInput 78 [AT_FDCWD; 0; 0; 0; 0; 0]
+    (fun _ => None) (fun _ => None).
+
+Definition readlinkat_negative_size_input : SyscallInput :=
+  mkInput 78 [AT_FDCWD; 0; 0; Z_to_bv 64 (2 ^ 32 - 1); 0; 0]
+    (fun _ => None) (fun _ => None).
+
+Definition exe_link_high_size_input : SyscallInput :=
+  mkInput 78 [AT_FDCWD; 0x2000; 0x4000; Z_to_bv 64 (2 ^ 32 + 3); 0; 0]
+    (in_mem exe_link_input) (in_wmem exe_link_input).
+
+Example readlinkat_size_precedes_path_and_uses_low32 :
+  check_syscall readlinkat_zero_size_input
+    (mkEffect (errno_ret EINVAL) [] []) statat_absent_model
+    = CheckOk statat_absent_model []
+  /\ check_syscall readlinkat_negative_size_input
+       (mkEffect (errno_ret EINVAL) [] []) statat_absent_model
+       = CheckOk statat_absent_model []
+  /\ check_syscall exe_link_high_size_input
+       (mkEffectU 2 [(0x4000, [Z_to_bv 8 47; Z_to_bv 8 97])]
+                  [] [] [] [(0x2000, 15%nat)]) statat_absent_model
+       = CheckOk statat_absent_model [].
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
+Definition readlinkat_plain_input : SyscallInput :=
+  mkInput 78 [AT_FDCWD; 0x2000; 0x4000; 3; 0; 0]
+    (in_mem statat_absent_input) (fun _ => None).
+
+Example readlinkat_plain_path_copyin_is_charged :
+  check_syscall readlinkat_plain_input
+    (with_copyins [(0x2000, 2%nat)]
+       (mkEffect (errno_ret EINVAL) [] [])) statat_absent_model
+    = CheckOk statat_absent_model []
+  /\ check_syscall readlinkat_plain_input
+       (mkEffect (errno_ret EINVAL) [] []) statat_absent_model
+       = CheckReject.
+Proof. vm_compute. split; reflexivity. Qed.
+
 (** Which reason from the top of [Checks/Examples.v]: the third and the
     fourth together.  A copy-in ledger is MODEL-INTERNAL STATE that no
     observation of a real execution reveals — Linux returns the same

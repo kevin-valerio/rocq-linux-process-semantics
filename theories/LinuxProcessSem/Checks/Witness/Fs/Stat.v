@@ -18,11 +18,16 @@ From LinuxProcessSemantics.LinuxProcessSem.Checks.Witness Require Export
 
 Definition readlinkat_witness (i : SyscallInput) (dirfd : word) (m : Model)
     : outcome SyscallEffect :=
+  if (sint32 (in_arg i 3) <=? 0)%Z then
+    ret_outcome (errno_ret EINVAL) m
+  else
+  outcome_copyins (readlinkat_reads i)
+  (
   match read_cstr (in_mem i) (in_arg i 1) with
   | CstrOk p =>
       if path_eqb p proc_self_exe_path then
         let buf := in_arg i 2 in
-        let bufsiz := in_arg i 3 in
+        let bufsiz := readlinkat_bufsiz i in
         let size := bv_unsigned bufsiz in
         if negb (Z.leb 1 size && Z.leb size (Z.of_nat path_max))
         then Unmodeled
@@ -31,37 +36,35 @@ Definition readlinkat_witness (i : SyscallInput) (dirfd : word) (m : Model)
              | None => Unmodeled
              | Some _ =>
                  let bs := [Z_to_bv 8 47] in
-                 Ok (mkEffectU (len_word bs) [(buf, bs)] [] [] []
-                       [(in_arg i 1,
-                         cstr_access_len_aux (in_mem i) (in_arg i 1) path_max)])
-                    m []
+                 Ok (mkEffect (len_word bs) [(buf, bs)] []) m []
              end
       else if negb (bv_eqb dirfd AT_FDCWD32) then Unmodeled
            else ret_outcome (errno_ret EINVAL) m
   | _ => if negb (bv_eqb dirfd AT_FDCWD32) then Unmodeled
          else ret_outcome (errno_ret EINVAL) m
-  end.
+  end).
 
 Lemma readlinkat_witness_ok : forall i dirfd m,
   readlinkat_spec dirfd i m (readlinkat_witness i dirfd m).
 Proof.
   intros i dirfd m. unfold readlinkat_spec, readlinkat_witness.
   eapply bind_step; [apply input_ok|]. cbv beta.
+  destruct ((sint32 (in_arg i 3) <=? 0)%Z) eqn:Hearly.
+  { unfold err_ret, ret_only, ret_outcome. apply pure_ok. }
+  apply record_copyins_outcome.
   destruct (read_cstr (in_mem i) (in_arg i 1)) as [p| |] eqn:Hp.
   - destruct (path_eqb p proc_self_exe_path) eqn:Hexe.
-    + destruct (negb (Z.leb 1 (bv_unsigned (in_arg i 3))
-                     && Z.leb (bv_unsigned (in_arg i 3)) (Z.of_nat path_max)))
+    + destruct (negb (Z.leb 1 (bv_unsigned (readlinkat_bufsiz i))
+                     && Z.leb (bv_unsigned (readlinkat_bufsiz i)) (Z.of_nat path_max)))
         eqn:Hsize.
       { apply unmodeled_intro. }
-      destruct (negb (access_okb (in_arg i 2) (bv_unsigned (in_arg i 3))))
+      destruct (negb (access_okb (in_arg i 2) (bv_unsigned (readlinkat_bufsiz i))))
         eqn:Haccess.
       { apply unmodeled_intro. }
-      destruct (read_bytes_map (in_wmem i) (in_arg i 2) (in_arg i 3))
+      destruct (read_bytes_map (in_wmem i) (in_arg i 2) (readlinkat_bufsiz i))
         as [old|] eqn:Hmem.
       2: { apply unmodeled_intro. }
-      unfold record_copyins.
-      eapply bind_step.
-      * apply alt_r. eapply bind_step.
+      apply alt_r. eapply bind_step.
         -- apply (choose_ok _ [Z_to_bv 8 47]).
            unfold exe_link_bytes_ok.
            apply Bool.negb_false_iff in Hsize.
@@ -74,7 +77,6 @@ Proof.
            replace (Z.of_nat 1) with 1%Z by reflexivity.
            rewrite Hmin. reflexivity.
         -- apply pure_ok.
-      * apply pure_ok.
     + destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd.
       * apply unmodeled_intro.
       * unfold err_ret, ret_only, ret_outcome. apply pure_ok.

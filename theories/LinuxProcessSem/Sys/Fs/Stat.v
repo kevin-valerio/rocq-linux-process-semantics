@@ -27,7 +27,8 @@ Open Scope sys_scope.
     the task has no executable file, so that outcome is also admitted.
     The model covers this path when the whole output buffer is writable
     and its size is 1..PATH_MAX.
-    Other buffer shapes still fail closed. *)
+    The pathname read is charged for every answered result.  Other
+    buffer shapes still fail closed. *)
 Definition proc_self_exe_path : path :=
   map (Z_to_bv 8)
     [47%Z;112%Z;114%Z;111%Z;99%Z;47%Z;115%Z;101%Z;
@@ -38,17 +39,29 @@ Definition exe_link_bytes_ok (bufsiz : word) (bs : list byte) : bool :=
   && Z.leb (Z.of_nat (length bs)) (bv_unsigned bufsiz)
   && forallb (fun b => negb (bv_eqb b (Z_to_bv 8 0))) bs.
 
-(** [readlinkat] (78).  Only the procfs executable link has a success
-    arm.  The absolute path ignores [dirfd], as Linux and QEMU do.  The
+Definition readlinkat_reads (i : SyscallInput) : list (word * nat) :=
+  [(in_arg i 1, cstr_access_len_aux (in_mem i) (in_arg i 1) path_max)].
+
+Definition readlinkat_bufsiz (i : SyscallInput) : word :=
+  abi_low32 (in_arg i 3).
+
+(** [readlinkat] (78).  A nonpositive signed 32-bit buffer size returns
+    -EINVAL before any pathname read, as [do_readlinkat] does.  Only the
+    procfs executable link has a success arm.  The absolute path ignores
+    [dirfd], as Linux and QEMU do.  The
     old AT_FDCWD error arm remains for paths represented by the flat,
-    symlink-free file system. *)
+    symlink-free file system.  That old arm can reject real -ENOENT or
+    -EFAULT results for other pathnames; this change covers only the
+    exact procfs path. *)
 Definition readlinkat_spec (dirfd : word) : Sys SyscallEffect :=
   i <- input ;;
-  match read_cstr (in_mem i) (in_arg i 1) with
+  if (sint32 (in_arg i 3) <=? 0)%Z then err_ret EINVAL else
+  record_copyins (readlinkat_reads i)
+  (match read_cstr (in_mem i) (in_arg i 1) with
   | CstrOk p =>
       if path_eqb p proc_self_exe_path then
         let buf := in_arg i 2 in
-        let bufsiz := in_arg i 3 in
+        let bufsiz := readlinkat_bufsiz i in
         let size := bv_unsigned bufsiz in
         if negb (Z.leb 1 size && Z.leb size (Z.of_nat path_max))
         then unmodeled
@@ -56,18 +69,16 @@ Definition readlinkat_spec (dirfd : word) : Sys SyscallEffect :=
         else match read_bytes_map (in_wmem i) buf bufsiz with
              | None => unmodeled
              | Some _ =>
-                 record_copyins
-                   [(in_arg i 1, cstr_access_len_aux (in_mem i) (in_arg i 1) path_max)]
-                   (alt (err_ret ENOENT)
-                     (bs <- choose (fun bs : list byte =>
-                                      exe_link_bytes_ok bufsiz bs = true) ;;
-                      pure (mkEffect (len_word bs) [(buf, bs)] [])))
+                 alt (err_ret ENOENT)
+                   (bs <- choose (fun bs : list byte =>
+                                    exe_link_bytes_ok bufsiz bs = true) ;;
+                    pure (mkEffect (len_word bs) [(buf, bs)] []))
              end
       else if negb (bv_eqb dirfd AT_FDCWD32) then unmodeled
            else err_ret EINVAL
   | _ => if negb (bv_eqb dirfd AT_FDCWD32) then unmodeled
          else err_ret EINVAL
-  end.
+  end).
 
 (** The flag WORDS [newfstatat_spec] interprets: 0 (plain [stat]) and
     AT_SYMLINK_NOFOLLOW ([lstat]).  Those are the only two riscv64 musl
