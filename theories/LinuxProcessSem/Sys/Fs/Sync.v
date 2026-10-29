@@ -244,4 +244,5 @@ Definition fsync_spec (fd : word) : Sys SyscallEffect :=
                                                       either, which is why the read-only arm
                                                       above is not an error *)
   | Some FdDir         => ret_only (Z_to_bv 64 0) (* directory fsync succeeds; the key-publish path needs it *)
+  | Some (FdProcMaps _) => err_ret EINVAL         (* proc_pid_maps_operations has no .fsync *)
   end.

@@ -588,6 +588,20 @@ Definition fstat_devnull_spec (statbuf : word) : Sys SyscallEffect :=
 Definition fstat_urandom_spec (statbuf : word) : Sys SyscallEffect :=
   fstat_chrdev_spec urandom_path stat_urandom_ok statbuf.
 
+(** Procfs generates the maps contents when read, while fstat reports
+    the inode's zero size.  Its owner can change with the process's
+    credentials, so this arm does not use the ordinary file stat pin. *)
+Definition fstat_proc_maps_spec (statbuf : word) : Sys SyscallEffect :=
+  i <- input ;;
+  if negb (access_okb statbuf STAT_SIZE) then err_ret EFAULT
+  else match read_bytes_map (in_wmem i) statbuf (Z_to_bv 64 STAT_SIZE) with
+       | None => unmodeled
+       | Some _ =>
+           bs <- choose (fun bs : list byte =>
+                           stat_buf_wf bs = true /\ stat_proc_maps_ok bs = true) ;;
+           pure (mkEffect (Z_to_bv 64 0) [(statbuf, bs)] [])
+       end.
+
 (** THE MATCH BELOW IS TOTAL ON [FdEntry] ON PURPOSE, with no wildcard.
     A new constructor is a new kind of file, and whoever adds it must
     decide what [fstat] says about it; the non-exhaustive-match error is
@@ -689,5 +703,6 @@ Definition fstat_spec (fd statbuf : word) : Sys SyscallEffect :=
                                      (* the random device: S_IFCHR, [st_rdev] 1:9
                                         ([Uapi.stat_urandom_ok]), the rest pinned once
                                         under [Uapi.urandom_path] *)
+  | Some (FdProcMaps _) => fstat_proc_maps_spec statbuf
   end.
 

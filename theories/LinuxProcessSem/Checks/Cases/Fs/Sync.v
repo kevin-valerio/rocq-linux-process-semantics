@@ -27,6 +27,20 @@ Definition fsync_model : Model :=
     (mkVmMaps [] [] 0 0 demo_limit) IEof
     [([102], [120]); ([103], [121])] None None None.
 
+Example fsync_proc_maps_is_einval :
+  let m := with_fds (fd_insert (m_fds fsync_model) 6 (FdProcMaps 0))
+                       fsync_model in
+  check_syscall
+    (mkInput 82 [6; 0; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
+    (mkEffect (errno_ret EINVAL) [] []) m = CheckOk m []
+  /\ check_syscall
+       (mkInput 83 [6; 0; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
+       (mkEffect (errno_ret EINVAL) [] []) m = CheckOk m []
+  /\ check_syscall
+       (mkInput 82 [6; 0; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
+       (mkEffect 0 [] []) m = CheckReject.
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
 (** THE CHANNEL ARM ON fd 0.
 
     The second conjunct is what makes the first non-vacuous: a kernel

@@ -364,6 +364,23 @@ Local Definition check_openat_urandom (flags : word) (eff : SyscallEffect)
       else CheckUnmodeled
   end.
 
+Local Definition check_openat_proc_maps (flags : word) (eff : SyscallEffect)
+    (m : Model) : check_result :=
+  match m_proc_maps m with
+  | None => CheckUnmodeled
+  | Some _ =>
+      match fs_lookup (m_fs m) proc_self_maps_path with
+      | Some _ => CheckUnmodeled
+      | None =>
+          if fs_under (m_fs m) proc_self_maps_path then CheckUnmodeled
+          else if Z.eqb (Z.ldiff (bv_unsigned flags) open_ignored_flags) 0
+          then check_open_result eff m
+                 (fun fd => with_fds (fd_insert (m_fds m) fd
+                                   (FdProcMaps (Z_to_bv 64 0))) m)
+          else CheckUnmodeled
+      end
+  end.
+
 (** Mirrors [Open.openat_tmp_spec]; that definition carries the premise,
     the three shapes and the reason each decline is a decline. *)
 Local Definition check_openat_tmp (n p : path) (flags : word)
@@ -387,6 +404,7 @@ Local Definition check_openat_sep (p : path) (flags : word)
   if path_eqb p localtime_path then check_openat_localtime flags eff m
   else if path_eqb p devnull_path then check_openat_devnull flags eff m
   else if path_eqb p urandom_path then check_openat_urandom flags eff m
+  else if path_eqb p proc_self_maps_path then check_openat_proc_maps flags eff m
   else match tmp_name p with
        | Some n => check_openat_tmp n p flags eff m
        | None => CheckUnmodeled
@@ -675,6 +693,19 @@ Proof.
   discriminate.
 Qed.
 
+Local Lemma check_openat_proc_maps_sound_ok : forall i flags eff m m' evs,
+  check_openat_proc_maps flags eff m = CheckOk m' evs ->
+  openat_proc_maps_spec flags m i m (Ok eff m' evs).
+Proof.
+  intros i flags eff m m' evs H.
+  unfold check_openat_proc_maps, openat_proc_maps_spec in *.
+  destruct (m_proc_maps m) as [data|]; [|discriminate].
+  destruct (fs_lookup (m_fs m) proc_self_maps_path); [discriminate|].
+  destruct (fs_under (m_fs m) proc_self_maps_path); [discriminate|].
+  destruct (Z.eqb (Z.ldiff (bv_unsigned flags) open_ignored_flags) 0);
+    [now apply check_open_result_sound_ok|discriminate].
+Qed.
+
 Local Lemma check_openat_tmp_sound_ok : forall i n p flags eff m m' evs,
   check_openat_tmp n p flags eff m = CheckOk m' evs ->
   openat_tmp_spec n p flags m i m (Ok eff m' evs).
@@ -703,6 +734,8 @@ Proof.
     [now apply check_openat_devnull_sound_ok|].
   destruct (path_eqb p urandom_path);
     [now apply check_openat_urandom_sound_ok|].
+  destruct (path_eqb p proc_self_maps_path);
+    [now apply check_openat_proc_maps_sound_ok|].
   destruct (tmp_name p) as [n|];
     [now apply check_openat_tmp_sound_ok|discriminate].
 Qed.
@@ -942,6 +975,22 @@ Proof.
   apply unmodeled_intro.
 Qed.
 
+Local Lemma check_openat_proc_maps_sound_unmodeled : forall i flags eff m,
+  check_openat_proc_maps flags eff m = CheckUnmodeled ->
+  openat_proc_maps_spec flags m i m Unmodeled.
+Proof.
+  intros i flags eff m H.
+  unfold check_openat_proc_maps, openat_proc_maps_spec in *.
+  destruct (m_proc_maps m) as [data|]; [|apply unmodeled_intro].
+  destruct (fs_lookup (m_fs m) proc_self_maps_path);
+    [apply unmodeled_intro|].
+  destruct (fs_under (m_fs m) proc_self_maps_path);
+    [apply unmodeled_intro|].
+  destruct (Z.eqb (Z.ldiff (bv_unsigned flags) open_ignored_flags) 0);
+    [exfalso; now apply check_open_result_no_unmodeled in H
+    |apply unmodeled_intro].
+Qed.
+
 Local Lemma check_openat_tmp_sound_unmodeled : forall i n p flags eff m,
   check_openat_tmp n p flags eff m = CheckUnmodeled ->
   openat_tmp_spec n p flags m i m Unmodeled.
@@ -970,6 +1019,8 @@ Proof.
     [exact (check_openat_devnull_sound_unmodeled i flags eff m H)|].
   destruct (path_eqb p urandom_path);
     [exact (check_openat_urandom_sound_unmodeled i flags eff m H)|].
+  destruct (path_eqb p proc_self_maps_path);
+    [exact (check_openat_proc_maps_sound_unmodeled i flags eff m H)|].
   destruct (tmp_name p) as [n|];
     [exact (check_openat_tmp_sound_unmodeled i n p flags eff m H)
     |apply unmodeled_intro].
@@ -1398,6 +1449,23 @@ Proof.
   unfold unmodeled. intro Hu. discriminate Hu.
 Qed.
 
+Local Lemma check_openat_proc_maps_complete_ok : forall i flags eff m m' evs,
+  openat_proc_maps_spec flags m i m (Ok eff m' evs) ->
+  check_openat_proc_maps flags eff m = CheckOk m' evs /\ eff_copyins eff = [].
+Proof.
+  intros i flags eff m m' evs.
+  unfold openat_proc_maps_spec, check_openat_proc_maps.
+  destruct (m_proc_maps m) as [data|];
+    [|unfold unmodeled; intro Hu; discriminate Hu].
+  destruct (fs_lookup (m_fs m) proc_self_maps_path);
+    [unfold unmodeled; intro Hu; discriminate Hu|].
+  destruct (fs_under (m_fs m) proc_self_maps_path);
+    [unfold unmodeled; intro Hu; discriminate Hu|].
+  destruct (Z.eqb (Z.ldiff (bv_unsigned flags) open_ignored_flags) 0);
+    [apply check_open_result_complete_ok
+    |unfold unmodeled; intro Hu; discriminate Hu].
+Qed.
+
 Local Lemma check_openat_tmp_complete_ok : forall i n p flags eff m m' evs,
   openat_tmp_spec n p flags m i m (Ok eff m' evs) ->
   check_openat_tmp n p flags eff m = CheckOk m' evs /\ eff_copyins eff = [].
@@ -1430,6 +1498,8 @@ Proof.
     [apply check_openat_devnull_complete_ok|].
   destruct (path_eqb p urandom_path);
     [apply check_openat_urandom_complete_ok|].
+  destruct (path_eqb p proc_self_maps_path);
+    [apply check_openat_proc_maps_complete_ok|].
   destruct (tmp_name p) as [n|];
     [apply check_openat_tmp_complete_ok
     |unfold unmodeled; intro Hu; discriminate Hu].
@@ -1743,6 +1813,20 @@ Proof.
   unfold unmodeled. intros _. reflexivity.
 Qed.
 
+Local Lemma check_openat_proc_maps_complete_unmodeled : forall i flags eff m,
+  openat_proc_maps_spec flags m i m Unmodeled ->
+  check_openat_proc_maps flags eff m = CheckUnmodeled.
+Proof.
+  intros i flags eff m.
+  unfold openat_proc_maps_spec, check_openat_proc_maps.
+  destruct (m_proc_maps m) as [data|]; [|reflexivity].
+  destruct (fs_lookup (m_fs m) proc_self_maps_path); [reflexivity|].
+  destruct (fs_under (m_fs m) proc_self_maps_path); [reflexivity|].
+  destruct (Z.eqb (Z.ldiff (bv_unsigned flags) open_ignored_flags) 0);
+    [intro H; exfalso; exact (open_result_spec_no_unmodeled m _ i H)
+    |reflexivity].
+Qed.
+
 Local Lemma check_openat_tmp_complete_unmodeled : forall i n p flags eff m,
   openat_tmp_spec n p flags m i m Unmodeled ->
   check_openat_tmp n p flags eff m = CheckUnmodeled.
@@ -1771,6 +1855,8 @@ Proof.
     [apply check_openat_devnull_complete_unmodeled|].
   destruct (path_eqb p urandom_path);
     [apply check_openat_urandom_complete_unmodeled|].
+  destruct (path_eqb p proc_self_maps_path);
+    [apply check_openat_proc_maps_complete_unmodeled|].
   destruct (tmp_name p) as [n|];
     [apply check_openat_tmp_complete_unmodeled|reflexivity].
 Qed.
@@ -1941,6 +2027,7 @@ Definition check_ftruncate (fd len : word) (eff : SyscallEffect) (m : Model)
   | Some (FdPipe _ _) => check_ret_only eff (errno_ret EINVAL) m []  (* S_IFIFO, not S_ISREG *)
   | Some (FdDevNull _ _) => check_ret_only eff (errno_ret EINVAL) m []  (* S_IFCHR, not S_ISREG *)
   | Some FdUrandom => check_ret_only eff (errno_ret EINVAL) m []  (* S_IFCHR again *)
+  | Some (FdProcMaps _) => check_ret_only eff (errno_ret EINVAL) m []
   | Some (FdFile _ _) => check_ret_only eff (errno_ret EINVAL) m []
   | Some FdDir => check_ret_only eff (errno_ret EINVAL) m []
   | Some (FdFileW p _) | Some (FdFileRW p _) =>
@@ -1972,7 +2059,7 @@ Proof.
   destruct ((bv_signed len <? 0)%Z) eqn:Hneg.
   { apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
     apply pure_ok. }
-  destruct (fd_lookup (m_fds m) fd) as [[ch|p cur|p cur|p cur|p cur| |sk|pid pw|rd wr| ]|] eqn:Hfd;
+  destruct (fd_lookup (m_fds m) fd) as [[ch|p cur|p cur|p cur|p cur| |sk|pid pw|rd wr| |maps_off]|] eqn:Hfd;
     try (apply check_ret_only_ok_iff in H; destruct H as (-> & -> & ->);
          (eapply bind_ok0; [apply get_model_ok|]); cbv beta iota; srw Hfd;
          apply pure_ok).
@@ -1992,7 +2079,7 @@ Proof.
   unfold check_ftruncate in H. unfold ftruncate_spec.
   destruct ((bv_signed len <? 0)%Z) eqn:Hneg.
   { now apply check_ret_only_no_unmodeled in H. }
-  destruct (fd_lookup (m_fds m) fd) as [[ch|p cur|p cur|p cur|p cur| |sk|pid pw|rd wr| ]|] eqn:Hfd;
+  destruct (fd_lookup (m_fds m) fd) as [[ch|p cur|p cur|p cur|p cur| |sk|pid pw|rd wr| |maps_off]|] eqn:Hfd;
     try (now apply check_ret_only_no_unmodeled in H).
   (* every destruct precedes the bind: the spec's [fs_lookup] sits under
      [get_model]'s binder, so it is only rewritable once [get_model_ok]
@@ -2014,7 +2101,7 @@ Proof.
   unfold ftruncate_spec in H. unfold check_ftruncate. sys_unfold.
   cbv iota in H. inv_ok.
   destruct ((bv_signed len <? 0)%Z) eqn:Hneg; hall Hneg; inv_ok;
-    try (destruct (fd_lookup (m_fds m) fd) as [[ch|p cur|p cur|p cur|p cur| |sk|pid pw|rd wr| ]|] eqn:Hfd;
+    try (destruct (fd_lookup (m_fds m) fd) as [[ch|p cur|p cur|p cur|p cur| |sk|pid pw|rd wr| |maps_off]|] eqn:Hfd;
          hall Hfd; inv_ok);
     try (destruct (fs_lookup (m_fs m) p) as [data|] eqn:Hfs; hall Hfs; inv_ok);
     try (destruct (negb (modeled_truncate_gap data len)) eqn:Hgap; hall Hgap;
@@ -2030,7 +2117,7 @@ Proof.
   unfold ftruncate_spec in H. unfold check_ftruncate. sys_unfold.
   cbv iota in H. inv_ok.
   destruct ((bv_signed len <? 0)%Z) eqn:Hneg; hall Hneg; inv_ok;
-    try (destruct (fd_lookup (m_fds m) fd) as [[ch|p cur|p cur|p cur|p cur| |sk|pid pw|rd wr| ]|] eqn:Hfd;
+    try (destruct (fd_lookup (m_fds m) fd) as [[ch|p cur|p cur|p cur|p cur| |sk|pid pw|rd wr| |maps_off]|] eqn:Hfd;
          hall Hfd; inv_ok);
     try (destruct (fs_lookup (m_fs m) p) as [data|] eqn:Hfs; hall Hfs; inv_ok);
     try (destruct (negb (modeled_truncate_gap data len)) eqn:Hgap; hall Hgap;

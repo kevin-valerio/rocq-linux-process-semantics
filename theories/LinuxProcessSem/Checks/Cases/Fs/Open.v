@@ -20,6 +20,31 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Cases Require Export
   Prelude Fs.ReadWrite.
 
+Definition proc_maps_open_model : Model :=
+  with_proc_maps (Some [65; 66; 67])
+    (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)).
+
+Definition proc_maps_open_input (flags : word) : SyscallInput :=
+  mkInput 56 [AT_FDCWD; 0x2000; flags; 0; 0; 0]
+    (fun a =>
+       if (bv_leu 0x2000 a && bv_ltu a 0x2010)%bool
+       then Some (nth (Z.to_nat (bv_unsigned a - 8192))
+                      (proc_self_maps_path ++ [0]) 0)
+       else None)
+    (fun _ => None).
+
+Example openat_proc_self_maps_read_only :
+  check_syscall (proc_maps_open_input (Z_to_bv 64 O_CLOEXEC))
+    (with_copyins [(0x2000, 16%nat)] (mkEffect 3 [] []))
+    proc_maps_open_model
+  = CheckOk
+      (with_fds (fd_insert (m_fds proc_maps_open_model) 3 (FdProcMaps 0))
+         proc_maps_open_model) []
+  /\ check_syscall (proc_maps_open_input (Z_to_bv 64 O_WRONLY))
+       (with_copyins [(0x2000, 16%nat)] (mkEffect 3 [] []))
+       proc_maps_open_model = CheckUnmodeled.
+Proof. split; check_eq. Qed.
+
 Example openat_live_dirfd_still_unmodeled :
   check_syscall
     (mkInput 56 [1; 8192; 0; 0; 0; 0]
@@ -944,7 +969,7 @@ Definition image_input_tmp (fs0 tmp0 : Fs.Fs) : ProcInput :=
      the image inputs declare [default_urandom] (as [Cases.Prelude]'s
      fixture does) rather than [IEof]. *)
   mkProcInput_full [[]] [] fs0 IEof demo_uid demo_gid demo_groups net_silent
-                   default_nofile (Z_to_bv 64 0) demo_hwcap false Sv48 default_urandom tmp0.
+                   default_nofile (Z_to_bv 64 0) demo_hwcap false Sv48 default_urandom tmp0 None.
 
 Definition image_input (fs0 : Fs.Fs) : ProcInput := image_input_tmp fs0 [].
 
@@ -1227,7 +1252,7 @@ Example urandom_same_bytes_on_both_sides :
   let inp := mkProcInput_full [[]] [] [] IEof
                demo_uid demo_gid demo_groups net_silent
                default_nofile (Z_to_bv 64 0) demo_hwcap false Sv48
-               (urandom_stream urandom_decl) [] in
+               (urandom_stream urandom_decl) [] None in
   let src := with_fds (fd_insert (m_fds (init_model [] 0 0 demo_sp demo_limit inp))
                          3 FdUrandom)
                (init_model [] 0 0 demo_sp demo_limit inp) in
