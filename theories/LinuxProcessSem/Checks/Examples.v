@@ -44,7 +44,7 @@ Import ListNotations.
 Open Scope bv_scope.
 
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Cases Require Export
-  Prelude Uaccess VaSize MmapBase Hwcap Brk
+  Prelude Uaccess VaSize MmapBase Hwcap Brk Arch.Riscv.Hwprobe
   Fs.File Fs.ReadWrite Fs.Open Fs.Stat Fs.Sync Fs.Select
   Fs.Ioctl Fs.Fcntl Fs.Locks Fs.Namei Fs.Readdir Fs.Timerfd Fs.Pipe Fs.EventFd
   Mm.Mmap Mm.Mremap Mm.Mprotect Mm.Madvise Kernel.Fork Kernel.Futex.Syscalls
@@ -881,7 +881,7 @@ Example the_random_clause_is_what_the_fixture_carries :
   /\ ~ valid_input
         (mkProcInput_full [[]] [] [] IEof demo_uid demo_gid demo_groups
                           net_silent default_nofile (Z_to_bv 64 0) demo_hwcap
-                          false Sv48 IEof []).
+                          false Sv48 IEof [] None).
 Proof.
   split.
   - valid_urandom_default.
