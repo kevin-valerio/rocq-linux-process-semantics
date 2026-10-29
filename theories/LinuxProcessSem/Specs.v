@@ -91,7 +91,8 @@
                                                    security/commoncap.c's
                                                    cap_task_prctl, reached
                                                    through kernel/sys.c's
-                                                   security_task_prctl)
+                                                   security_task_prctl;
+                                                   PR_SET_VMA uses mm/madvise.c)
       Sys/Kernel/Time/Hrtimer.v  kernel/time/hrtimer.c       nanosleep
       Sys/Kernel/Time/PosixTimers.v
                                  kernel/time/posix-timers.c  clock_gettime clock_getres

@@ -1860,13 +1860,15 @@ Lemma check_setsid_frame : forall eff m m' evs,
   check_setsid eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof. intros eff m m' evs H. unfold check_setsid in H. vm_frame2 H. Qed.
 
-(** [prctl] answers [PR_CAPBSET_READ] out of a constant and declines
-    every other option, so no arm of it touches the model at all: both
-    accepting branches hand back [m] itself. *)
-Lemma check_prctl_frame : forall option_ arg2 eff m m' evs,
-  check_prctl option_ arg2 eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
+(** The capability and VMA name arms leave the mapping ledger alone. *)
+Lemma check_prctl_frame : forall i option_ arg2 eff m m' evs,
+  check_prctl i option_ arg2 eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
-  intros option_ arg2 eff m m' evs H. unfold check_prctl in H. vm_frame2 H.
+  intros i option_ arg2 eff m m' evs H. unfold check_prctl in H.
+  destruct (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ).
+  - vm_frame2 H.
+  - destruct (Z.eqb (bv_unsigned option_) PR_SET_VMA); [|discriminate].
+    unfold check_prctl_vma_name in H. vm_frame2 H.
 Qed.
 
 (** The four clock arms.  [gettimeofday], [clock_gettime], and [clock_getres] hand back

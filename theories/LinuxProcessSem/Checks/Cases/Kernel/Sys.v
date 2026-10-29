@@ -23,6 +23,44 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Cases Require Export
   Prelude Fs.ReadWrite Kernel.Fork.
 
+(** Go passes a short NUL-terminated name from its stack after an
+    anonymous mmap.  The copy-in includes the terminator. *)
+Definition vma_name_mem : word -> option byte :=
+  bytes_at 4096 (map (Z_to_bv 8)
+    [32%Z; 71%Z; 111%Z; 58%Z; 32%Z; 104%Z; 101%Z; 97%Z; 112%Z; 0%Z]).
+
+Definition vma_name_input (addr : word) : SyscallInput :=
+  mkInput 167 [Z_to_bv 64 PR_SET_VMA; 0; addr; 4096; 4096; 0]
+    vma_name_mem (fun _ => None).
+
+Example prctl_vma_name_enabled_success :
+  check_syscall (vma_name_input 65536)
+    (with_copyins [(4096, 10%nat)] (mkEffect 0 [] [])) one_map_model
+  = CheckOk one_map_model [].
+Proof. check_eq. Qed.
+
+Example prctl_vma_name_disabled_config :
+  check_syscall (vma_name_input 65536)
+    (mkEffect (errno_ret EINVAL) [] []) one_map_model
+  = CheckOk one_map_model [].
+Proof. check_eq. Qed.
+
+Example prctl_vma_name_allocation_failure :
+  check_syscall (vma_name_input 65536)
+    (with_copyins [(4096, 10%nat)] (mkEffect (errno_ret ENOMEM) [] []))
+    one_map_model = CheckOk one_map_model [].
+Proof. check_eq. Qed.
+
+Example prctl_vma_name_requires_copyin :
+  check_syscall (vma_name_input 65536)
+    (mkEffect 0 [] []) one_map_model = CheckReject.
+Proof. check_eq. Qed.
+
+Example prctl_vma_name_outside_mapping :
+  check_syscall (vma_name_input 69632)
+    (mkEffect 0 [] []) one_map_model = CheckUnmodeled.
+Proof. check_eq. Qed.
+
 (** The same envelope bound, for [getpid].  Earns its place by reason 1:
     it is a [forall] over admissible outcomes, and a finite set of runs
     can SAMPLE the envelope but cannot quantify over it.

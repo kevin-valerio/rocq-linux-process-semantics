@@ -1030,7 +1030,7 @@ Definition NEW_UTS_LEN : Z := 64%Z.
     [machine], [domainname], at offsets 0, 65, 130, 195, 260 and 325. *)
 Definition NEW_UTSNAME_SIZE : Z := 390%Z.
 
-(** [PR_CAPBSET_READ], the one [prctl] option this model answers
+(** [PR_CAPBSET_READ], a [prctl] option this model answers
     (include/uapi/linux/prctl.h, Linux v6.18.46, commit 1f99e9ab748f).
     It is NOT handled in kernel/sys.c's own [switch]: the LSM hook
     [security_task_prctl] runs first, and capability's implementation of
@@ -1038,6 +1038,11 @@ Definition NEW_UTSNAME_SIZE : Z := 390%Z.
     and returns before the syscall body's [switch] is reached.  See
     [Kernel.Sys.prctl_spec], which is where the whole argument lives. *)
 Definition PR_CAPBSET_READ : Z := 23%Z.
+
+(** [PR_SET_VMA] and its anonymous-name suboption in
+    include/uapi/linux/prctl.h at Linux v6.18.46. *)
+Definition PR_SET_VMA : Z := 0x53564d41%Z.
+Definition PR_SET_VMA_ANON_NAME : Z := 0%Z.
 
 (** [CAP_LAST_CAP], the highest capability number the kernel recognises:
     [CAP_CHECKPOINT_RESTORE], 40 (include/uapi/linux/capability.h, Linux
