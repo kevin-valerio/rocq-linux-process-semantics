@@ -809,7 +809,7 @@ Ltac sys_unfold :=
     err_ret, ret_only, errno_from, lowest_fd,
     set_fds, set_pipes, set_vmmaps, add_vm_lazy, forget_vm_range,
     set_stdin, set_urandom, set_fs, set_halted, set_tid,
-    set_rlimit_core, set_utsname, set_statpin, set_setsid_succeeded, set_clock, set_creds,
+    set_rlimit_core, set_rlimit_stack, set_rlimit_nofile, set_utsname, set_statpin, set_setsid_succeeded, set_clock, set_creds,
     set_sigmask, set_sigaltstack_installed,
     set_sigmask_deliver, set_sigabrt_pending, set_killed,
     get_model, get_fds, get_vmmaps, modify, input, sysno, arg,

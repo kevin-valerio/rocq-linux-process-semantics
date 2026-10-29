@@ -328,6 +328,10 @@ Definition set_creds (c : Creds) : Sys unit := modify (with_creds c).
 
 Definition set_rlimit_core (bs : list byte) : Sys unit :=
   modify (with_rlimit_core bs).
+Definition set_rlimit_stack (bs : list byte) : Sys unit :=
+  modify (with_rlimit_stack bs).
+Definition set_rlimit_nofile (bs : list byte) : Sys unit :=
+  modify (with_rlimit_nofile bs).
 
 (** Record the UTS name the environment revealed.  Called on exactly one
     branch of [Kernel.Sys.uname_spec] -- the one where
