@@ -557,8 +557,8 @@ Defined.
 Definition arm_sched_getaffinity : CheckedArm.
 Proof.
   refine (mkCheckedArm (mkSpecArm 123%Z (fun i => sched_getaffinity_spec (in_arg i 1) i))
-                       (fun i eff m => check_sched_getaffinity (in_arg i 1) eff m)
-                       (fun i m => sched_getaffinity_witness (in_arg i 1) m)
+                       (fun i eff m => check_sched_getaffinity i (in_arg i 1) eff m)
+                       (fun i m => sched_getaffinity_witness i (in_arg i 1) m)
                        _ _ _ _ _);
     cbn [sa_spec sa_no]; intros;
     eauto using check_sched_getaffinity_sound_ok, check_sched_getaffinity_sound_unmodeled, check_sched_getaffinity_complete_ok, check_sched_getaffinity_complete_unmodeled, sched_getaffinity_witness_ok.
@@ -1645,10 +1645,10 @@ Lemma sa_spec_arm_sched_setscheduler : forall i m o,
 Proof. reflexivity. Qed.
 
 Lemma ca_check_arm_sched_getaffinity : forall i eff m,
-  ca_check arm_sched_getaffinity i eff m = check_sched_getaffinity (in_arg i 1) eff m.
+  ca_check arm_sched_getaffinity i eff m = check_sched_getaffinity i (in_arg i 1) eff m.
 Proof. reflexivity. Qed.
 Lemma ca_witness_arm_sched_getaffinity : forall i m,
-  ca_witness arm_sched_getaffinity i m = sched_getaffinity_witness (in_arg i 1) m.
+  ca_witness arm_sched_getaffinity i m = sched_getaffinity_witness i (in_arg i 1) m.
 Proof. reflexivity. Qed.
 Lemma sa_spec_arm_sched_getaffinity : forall i m o,
   sa_spec (ca_arm arm_sched_getaffinity) i m o = sched_getaffinity_spec (in_arg i 1) i m o.

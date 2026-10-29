@@ -1599,7 +1599,8 @@ Lemma check_read_frame : forall i fd buf count eff m m' evs,
   check_read i fd buf count eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
   intros i fd buf count eff m m' evs H.
-  unfold check_read, check_read_urandom, check_socket_pending_error,
+  unfold check_read, check_read_proc_maps, check_read_urandom,
+    check_socket_pending_error,
     check_access_ok_zero in H.
   cbv zeta in H. vm_frame2 H.
 Qed.
@@ -1643,6 +1644,7 @@ Proof.
     Open.check_openat_sep, Open.check_openat_localtime,
     Open.check_openat_devnull, Open.check_open_devnull,
     Open.check_openat_urandom, Open.check_open_urandom,
+    Open.check_openat_proc_maps,
     Open.check_openat_tmp,
     Open.check_openat_read, Open.check_openat_create, Open.check_openat_excl,
     Open.check_openat_dir, Open.check_openat_append,
@@ -2087,7 +2089,8 @@ Proof.
   destruct e; try discriminate;
     first [eapply check_fstat_file_frame; exact H
           |eapply check_fstat_devnull_frame; exact H
-          |eapply check_fstat_urandom_frame; exact H].
+          |eapply check_fstat_urandom_frame; exact H
+          |unfold check_fstat_proc_maps in H; vm_frame2 H].
 Qed.
 
 Lemma check_getid_frame : forall sel eff m m' evs,
@@ -2187,12 +2190,12 @@ Proof.
   unfold check_sched_setscheduler in H. vm_frame2 H.
 Qed.
 
-(** sched_getaffinity answers an errno or declines; it never reaches
-    user memory, let alone the mappings. *)
-Lemma check_sched_getaffinity_frame : forall len eff m m' evs,
-  check_sched_getaffinity len eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
+(** sched_getaffinity records the CPU-mask size but preserves mappings. *)
+Lemma check_sched_getaffinity_frame : forall i len eff m m' evs,
+  check_sched_getaffinity i len eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
-  intros len eff m m' evs H. unfold check_sched_getaffinity in H. vm_frame2 H.
+  intros i len eff m m' evs H. unfold check_sched_getaffinity in H. vm_frame2 H.
+  all: unfold affinity_after_success; destruct (m_affinity_size m); reflexivity.
 Qed.
 
 (** sched_yield answers 0 and hands back the model it was given, so the

@@ -20,8 +20,7 @@ Open Scope bv_scope.
 (* [demo_model] is the shared fixture; it is defined beside the id calls
    that mutate it and shared rather than redefined — [Checks/Examples.v]
    re-exports every Cases module into one namespace, so two definitions of
-   a name would shadow each other.  Nothing here depends on what is IN it:
-   [sched_getaffinity_spec] reads no model state. *)
+   a name would shadow each other. *)
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Cases Require Export
   Prelude Kernel.Sys.
 
@@ -132,6 +131,33 @@ Example sched_getaffinity_wrapping_length_lies_rejected :
        (mkEffect (errno_ret EINVAL) [(3735928559, [Z_to_bv 8 0])] []) demo_model
        = CheckReject.
 Proof. repeat split; vm_compute; reflexivity. Qed.
+
+(** A first short return records an eight-byte mask size.  The second
+    call may use a larger request but must return the same size. *)
+Definition sched_getaffinity_writable_in (len : word) : SyscallInput :=
+  mkInput 123 [0; len; 4096; 0; 0; 0] (fun _ => None)
+    (fun a =>
+       if ((4096 <=? bv_unsigned a)%Z && (bv_unsigned a <? 4104)%Z)%bool
+       then Some (Z_to_bv 8 0) else None).
+
+Definition sched_getaffinity_mask : list byte :=
+  Z_to_bv 8 1 :: repeat (Z_to_bv 8 0) 7.
+
+Example sched_getaffinity_eight_byte_size_is_pinned :
+  let next := affinity_after_success demo_model in
+  let effect := mkEffect 8 [(4096, sched_getaffinity_mask)] [] in
+  check_syscall (sched_getaffinity_writable_in 32) effect demo_model
+    = CheckOk next []
+  /\ check_syscall (sched_getaffinity_writable_in 8192) effect next
+       = CheckOk next []
+  /\ m_affinity_size next = Some 8%nat.
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+Example sched_getaffinity_allocation_failure_does_not_pin_size :
+  check_syscall (sched_getaffinity_writable_in 32)
+    (mkEffect (errno_ret ENOMEM) [] []) demo_model
+  = CheckOk demo_model [].
+Proof. vm_compute. reflexivity. Qed.
 
 (* -------------------------------------------------------------------------
    sched_setscheduler (119)
