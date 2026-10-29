@@ -237,6 +237,7 @@ Fixpoint fd_names_path (fds : list (word * FdEntry)) (p : path) : bool :=
        so no descriptor of this kind names a path [unlinkat] can reach *)
   | (_, FdUrandom) :: r => fd_names_path r p
     (* the same for /dev/urandom, for the same reason *)
+  | (_, FdProcMaps _) :: r => fd_names_path r p
   end.
 
 (** unlinkat's injectable failures: environment conditions the model does

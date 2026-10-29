@@ -260,6 +260,23 @@ Definition stat_of (ino mode size blocks tim : Z) : list byte :=
     the length is checked, so every other member here is free. *)
 Definition stat_truthful : list byte := stat_of 4711 S_IFREG 9 8 1700000000.
 
+Definition proc_maps_stat_model : Model :=
+  with_fds [(3, FdProcMaps 0)]
+    (with_proc_maps (Some [65; 66; 67])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))).
+
+Example fstat_proc_maps_reports_zero_inode_size :
+  check_syscall fstat_input
+    (mkEffect 0 [(4096, stat_of 4711 (S_IFREG + 292) 0 0 1700000000)] [])
+    proc_maps_stat_model = CheckOk proc_maps_stat_model []
+  /\ check_syscall fstat_input
+       (mkEffect 0 [(4096, stat_of 4711 (S_IFREG + 292) 3 0 1700000000)] [])
+       proc_maps_stat_model = CheckReject
+  /\ check_syscall fstat_input
+       (mkEffect 0 [(4096, stat_of 4711 S_IFREG 0 0 1700000000)] [])
+       proc_maps_stat_model = CheckReject.
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
 (* ---- the accepting controls -------------------------------------------- *)
 
 (** The first stat of a file is where its identity enters the model: the

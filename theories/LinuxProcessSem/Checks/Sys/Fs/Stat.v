@@ -952,6 +952,103 @@ Proof.
     + exfalso. sys_unfold; inv_ok; hall Hfs; hall Ha; hall Hw; hall Hp; inv_ok.
 Qed.
 
+Definition check_fstat_proc_maps (i : SyscallInput) (statbuf : word)
+    (eff : SyscallEffect) (m : Model) : check_result :=
+  if negb (access_okb statbuf STAT_SIZE)
+  then check_ret_only eff (errno_ret EFAULT) m []
+  else match read_bytes_map (in_wmem i) statbuf (Z_to_bv 64 STAT_SIZE) with
+       | None => CheckUnmodeled
+       | Some _ =>
+           match eff with
+           | mkEffectU r [(a, bs)] [] [] [] [] =>
+               if (bv_eqb r (Z_to_bv 64 0) && bv_eqb a statbuf
+                   && stat_buf_wf bs && stat_proc_maps_ok bs)%bool
+               then CheckOk m [] else CheckReject
+           | _ => CheckReject
+           end
+       end.
+
+Lemma check_fstat_proc_maps_sound_ok : forall i statbuf eff m m' evs,
+  check_fstat_proc_maps i statbuf eff m = CheckOk m' evs ->
+  fstat_proc_maps_spec statbuf i m (Ok eff m' evs).
+Proof.
+  intros i statbuf eff m m' evs H.
+  unfold check_fstat_proc_maps in H. unfold fstat_proc_maps_spec.
+  eapply bind_ok0; [apply input_ok|]. cbv beta.
+  destruct (negb (access_okb statbuf STAT_SIZE)) eqn:Ha.
+  - apply check_ret_only_ok_iff in H as (-> & -> & ->). apply pure_ok.
+  - destruct (read_bytes_map (in_wmem i) statbuf (Z_to_bv 64 STAT_SIZE))
+      as [w|] eqn:Hw; [|discriminate].
+    destruct eff as [r ws zs us cs ins].
+    destruct ws as [|[a bs] [|? ?]]; destruct zs as [|? ?];
+      destruct us as [|? ?]; destruct cs as [|? ?];
+      destruct ins as [|? ?]; try discriminate.
+    destruct (bv_eqb r (Z_to_bv 64 0) && bv_eqb a statbuf
+              && stat_buf_wf bs && stat_proc_maps_ok bs)%bool eqn:HG;
+      [|discriminate].
+    inversion H; clear H; subst m' evs.
+    apply andb_true_iff in HG as [HG HOK].
+    apply andb_true_iff in HG as [HG HWF].
+    apply andb_true_iff in HG as [HR HA].
+    apply bv_eqb_eq in HR; subst r.
+    apply bv_eqb_eq in HA; subst a.
+    eapply bind_ok0; [apply (choose_ok _ bs); split; eassumption|].
+    apply pure_ok.
+Qed.
+
+Lemma check_fstat_proc_maps_sound_unmodeled : forall i statbuf eff m,
+  check_fstat_proc_maps i statbuf eff m = CheckUnmodeled ->
+  fstat_proc_maps_spec statbuf i m Unmodeled.
+Proof.
+  intros i statbuf eff m H.
+  unfold check_fstat_proc_maps in H. unfold fstat_proc_maps_spec.
+  eapply bind_unmodeled2; [apply input_ok|].
+  destruct (negb (access_okb statbuf STAT_SIZE)) eqn:Ha.
+  - now apply check_ret_only_no_unmodeled in H.
+  - destruct (read_bytes_map (in_wmem i) statbuf (Z_to_bv 64 STAT_SIZE))
+      as [w|] eqn:Hw; [|apply unmodeled_intro].
+    destruct eff as [r ws zs us cs ins].
+    destruct ws as [|[a bs] [|? ?]]; destruct zs as [|? ?];
+      destruct us as [|? ?]; destruct cs as [|? ?];
+      destruct ins as [|? ?]; try discriminate.
+    destruct (bv_eqb r (Z_to_bv 64 0) && bv_eqb a statbuf
+              && stat_buf_wf bs && stat_proc_maps_ok bs)%bool; discriminate.
+Qed.
+
+Lemma check_fstat_proc_maps_complete_ok : forall i statbuf eff m m' evs,
+  fstat_proc_maps_spec statbuf i m (Ok eff m' evs) ->
+  check_fstat_proc_maps i statbuf eff m = CheckOk m' evs.
+Proof.
+  intros i statbuf eff m m' evs H.
+  unfold fstat_proc_maps_spec in H. unfold check_fstat_proc_maps.
+  destruct (negb (access_okb statbuf STAT_SIZE)) eqn:Ha.
+  - sys_unfold; inv_ok; hall Ha; inv_ok.
+    apply check_ret_only_ok_iff. now repeat split.
+  - destruct (read_bytes_map (in_wmem i) statbuf (Z_to_bv 64 STAT_SIZE))
+      as [w|] eqn:Hw; [|sys_unfold; inv_ok; hall Ha; hall Hw; inv_ok].
+    sys_unfold; inv_ok; hall Ha; hall Hw; inv_ok.
+    rewrite !bv_eqb_refl. cbn [andb].
+    match goal with
+    | Hwf : stat_buf_wf ?b = true,
+      Hok : stat_proc_maps_ok ?b = true |- _ =>
+        rewrite Hwf, Hok
+    end.
+    reflexivity.
+Qed.
+
+Lemma check_fstat_proc_maps_complete_unmodeled : forall i statbuf m eff,
+  fstat_proc_maps_spec statbuf i m Unmodeled ->
+  check_fstat_proc_maps i statbuf eff m = CheckUnmodeled.
+Proof.
+  intros i statbuf m eff H.
+  unfold fstat_proc_maps_spec in H. unfold check_fstat_proc_maps.
+  destruct (negb (access_okb statbuf STAT_SIZE)) eqn:Ha.
+  - exfalso. sys_unfold; inv_ok; hall Ha; inv_ok.
+  - destruct (read_bytes_map (in_wmem i) statbuf (Z_to_bv 64 STAT_SIZE))
+      as [w|] eqn:Hw; [|reflexivity].
+    exfalso. sys_unfold; inv_ok; hall Ha; hall Hw; inv_ok.
+Qed.
+
 (** fstat: total over [FdEntry], answering on the closed descriptor's
     -EBADF, the four file kinds, which share one inode and so one
     answer, /dev/null and /dev/urandom.  The other four decline as a body; see [Stat.fstat_spec] for which of [struct stat]'s twenty
@@ -971,6 +1068,7 @@ Definition check_fstat (i : SyscallInput) (fd statbuf : word)
   | Some (FdPipe _ _)  => CheckUnmodeled
   | Some (FdDevNull _ _) => check_fstat_devnull i statbuf eff m
   | Some FdUrandom => check_fstat_urandom i statbuf eff m
+  | Some (FdProcMaps _) => check_fstat_proc_maps i statbuf eff m
   end.
 
 Lemma check_fstat_sound_ok : forall i fd statbuf eff m m' evs,
@@ -984,7 +1082,8 @@ Proof.
     [destruct e; try discriminate;
      first [now apply check_fstat_file_sound_ok
            |now apply check_fstat_devnull_sound_ok
-           |now apply check_fstat_urandom_sound_ok]|].
+           |now apply check_fstat_urandom_sound_ok
+           |now apply check_fstat_proc_maps_sound_ok]|].
   apply check_ret_only_ok_iff in H as (-> & -> & ->). apply pure_ok.
 Qed.
 
@@ -1000,7 +1099,8 @@ Proof.
   destruct e; try apply unmodeled_intro;
     first [eapply check_fstat_file_sound_unmodeled; exact H
           |eapply check_fstat_devnull_sound_unmodeled; exact H
-          |eapply check_fstat_urandom_sound_unmodeled; exact H].
+          |eapply check_fstat_urandom_sound_unmodeled; exact H
+          |eapply check_fstat_proc_maps_sound_unmodeled; exact H].
 Qed.
 
 Lemma check_fstat_complete_ok : forall i fd statbuf eff m m' evs,
@@ -1014,6 +1114,7 @@ Proof.
     [destruct e; try (now apply check_fstat_file_complete_ok);
        try (now apply check_fstat_devnull_complete_ok);
        try (now apply check_fstat_urandom_complete_ok);
+       try (now apply check_fstat_proc_maps_complete_ok);
        unfold unmodeled in H; discriminate|].
   unfold pure in H. inversion H; clear H; subst.
   apply check_ret_only_ok_iff. now repeat split.
@@ -1030,6 +1131,7 @@ Proof.
     [destruct e; try reflexivity;
        first [eapply check_fstat_file_complete_unmodeled; exact H
              |eapply check_fstat_devnull_complete_unmodeled; exact H
-             |eapply check_fstat_urandom_complete_unmodeled; exact H]|].
+             |eapply check_fstat_urandom_complete_unmodeled; exact H
+             |eapply check_fstat_proc_maps_complete_unmodeled; exact H]|].
   unfold pure in H. discriminate.
 Qed.
