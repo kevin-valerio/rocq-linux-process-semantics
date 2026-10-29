@@ -950,6 +950,7 @@ Definition sock_fd (m : Model) (fd : word) : SockState + Z :=
                                             fails *)
   | Some FdUrandom => inr ENOTSOCK       (* nor /dev/urandom: [urandom_fops]
                                             (drivers/char/random.c) *)
+  | Some (FdProcMaps _) => inr ENOTSOCK
   | Some (FdSocket sk)  => inl sk
   end.
 
@@ -1893,7 +1894,8 @@ Definition sendmsg_spec (fd msgp flags : word) : Sys SyscallEffect :=
   | Some FdDir
   | Some (FdPipe _ _)
   | Some (FdDevNull _ _)
-  | Some FdUrandom =>          (* not a socket: [sock_from_file] is one comparison
+  | Some FdUrandom
+  | Some (FdProcMaps _) =>     (* not a socket: [sock_from_file] is one comparison
                                   against [socket_file_ops], and a pipe end and the
                                   two device kinds all fail it *)
       err_ret ENOTSOCK
@@ -2028,6 +2030,7 @@ Definition sockfd_lookup_errno (fds : list (word * FdEntry)) (fd : word)
          same comparison fails and the same -ENOTSOCK is exact *)
   | Some FdUrandom => Some ENOTSOCK
       (* and /dev/urandom's is [urandom_fops] (drivers/char/random.c) *)
+  | Some (FdProcMaps _) => Some ENOTSOCK
   | Some (FdSocket _) => None
   end.
 

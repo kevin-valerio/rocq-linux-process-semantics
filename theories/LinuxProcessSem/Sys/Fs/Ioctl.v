@@ -245,4 +245,5 @@ Definition ioctl_spec (fd req : word) : Sys SyscallEffect :=
          driver, which answers -EINVAL for them.  A real answer would
          be derived from that switch over a request word and a
          capability set; neither is written, so declined. *)
+  | Some (FdProcMaps _) => unmodeled
   end.

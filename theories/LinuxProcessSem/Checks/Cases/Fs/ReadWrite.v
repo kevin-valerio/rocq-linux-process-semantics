@@ -20,6 +20,47 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Cases Require Export
   Prelude.
 
+Definition proc_maps_read_model : Model :=
+  let m := with_proc_maps (Some [65; 66; 67])
+             (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) in
+  with_fds (fd_insert (m_fds m) 3 (FdProcMaps 0)) m.
+
+Definition proc_maps_read_input : SyscallInput :=
+  mkInput 63 [3; 0x4000; 4; 0; 0; 0]
+    (fun _ => None)
+    (fun a => if (bv_leu 0x4000 a && bv_ltu a 0x4004)%bool
+              then Some 0 else None).
+
+Example proc_maps_read_exact_bytes_and_offset :
+  check_syscall proc_maps_read_input
+    (mkEffect 3 [(0x4000, [65; 66; 67])] []) proc_maps_read_model
+  = CheckOk
+      (with_fds (fd_insert (m_fds proc_maps_read_model) 3 (FdProcMaps 3))
+         proc_maps_read_model) []
+  /\ check_syscall proc_maps_read_input
+       (mkEffect 2 [(0x4000, [65; 66])] []) proc_maps_read_model
+     = CheckReject
+  /\ check_syscall proc_maps_read_input
+       (mkEffect 3 [(0x4000, [65; 66; 68])] []) proc_maps_read_model
+     = CheckReject.
+Proof. repeat split; check_eq. Qed.
+
+Example proc_maps_read_partial_destination_is_unmodeled :
+  let i := mkInput 63 [3; 0x4000; 4; 0; 0; 0]
+             (fun _ => None)
+             (fun a => if bv_eqb a 0x4000 then Some 0 else None) in
+  check_syscall i
+    (mkEffect 1 [(0x4000, [65])] []) proc_maps_read_model
+  = CheckUnmodeled.
+Proof. check_eq. Qed.
+
+Example proc_maps_read_at_eof :
+  let m := with_fds
+             (fd_insert (m_fds proc_maps_read_model) 3 (FdProcMaps 3))
+             proc_maps_read_model in
+  check_syscall proc_maps_read_input (mkEffect 0 [] []) m = CheckOk m [].
+Proof. check_eq. Qed.
+
 Lemma file_write_emits_nothing : forall fd buf count i m p off eff m' evs,
   fd_lookup (m_fds m) fd = Some (FdFileW p off) ->
   write_spec fd buf count i m (Ok eff m' evs) ->
@@ -270,7 +311,7 @@ Proof.
      too, and so does a pipe READ end and an O_RDWR file, so each gets a
      bullet rather than a one-line dismissal.  The two write-only kinds
      ([FdFileW] and the append [FdFileA]) are the -EBADF pair. *)
-  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| ]|] eqn:Hfd;
+  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off]|] eqn:Hfd;
     cbv iota in Hspec;
     [ | | now destruct (Hro _ _ _ Hspec)
       | now destruct (Hro _ _ _ Hspec)
@@ -285,7 +326,7 @@ Proof.
         destruct (negb (access_okb buf (bv_unsigned count))); cbv iota in Hspec;
         [ now destruct (Hro _ _ _ Hspec)
         | exact (check_read_urandom_delivery_clamped _ _ _ _ _ _ _ _ _ Hspec Hws) ]
-      | now destruct (Hro _ _ _ Hspec) ].
+      | | now destruct (Hro _ _ _ Hspec) ].
   - (* channel *)
     destruct (negb (w_is0 ch)); cbv iota in Hspec;
       [now destruct (Hro _ _ _ Hspec)|].
@@ -448,6 +489,31 @@ Proof.
                     <= Z.max 0 (rw_count_clamp count))%Z).
     { rewrite <- Hdel. apply pipe_take_length. }
     pose proof (rw_count_clamp_range count). lia.
+  - (* the procfs snapshot also reads through the count clamp *)
+    unfold check_read_proc_maps in Hspec.
+    destruct (negb (access_okb buf (bv_unsigned count))); cbv iota in Hspec;
+      [now destruct (Hro _ _ _ Hspec)|].
+    destruct (m_proc_maps m) as [data|]; cbv iota in Hspec;
+      [|discriminate].
+    destruct (file_read data off (Z_to_bv 64 (rw_count_clamp count)))
+      as [|b rest] eqn:Hbs; cbv iota in Hspec;
+      [now destruct (Hro _ _ _ Hspec)|].
+    destruct (Z.of_nat (length data) <? page_size)%Z;
+      cbv iota in Hspec; [|discriminate].
+    destruct (read_bytes_map (in_wmem i) buf (Z_to_bv 64 1));
+      cbv iota in Hspec; [|now destruct (Hro _ _ _ Hspec)].
+    destruct (read_bytes_map (in_wmem i) buf (len_word (b :: rest)));
+      cbv iota in Hspec; [|discriminate].
+    destruct eff as [ret ws zs us cs copyins]. cbn in Hws. subst ws.
+    destruct zs; destruct us; destruct cs; destruct copyins;
+      cbv iota in Hspec; try discriminate Hspec.
+    destruct (bv_eqb a buf && bv_eqb ret (len_word (b :: rest))
+              && listN_eqb (b :: rest) bs) eqn:Hcond;
+      cbv iota in Hspec; [|discriminate Hspec].
+    apply andb_true_iff in Hcond as [_ Hbytes].
+    apply listN_eqb_eq in Hbytes. subst bs.
+    pose proof (file_read_clamped_len data off count) as Hl.
+    rewrite Hbs in Hl. exact Hl.
 Qed.
 
 (** ...and the rejecting direction: the specific lie no kernel in scope
@@ -2565,7 +2631,7 @@ Proof.
     destruct Hx as (-> & _ & _). cbn in Hc. discriminate. }
   destruct (ppos_einvalb pos); [now destruct (Hro _ _ _ H)|].
   destruct (fd_lookup (m_fds m) fd)
-    as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| ]|];
+    as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off]|];
     cbv iota in H; try (now destruct (Hro _ _ _ H)).
   (* three kinds survive that: the APPEND arm, whose checker is
      [CheckUnmodeled] and so never equals a [CheckOk], and the two

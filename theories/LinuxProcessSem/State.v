@@ -2672,7 +2672,8 @@ Inductive FdEntry :=
   | FdSocket (sk : SockState)
   | FdPipe (id : word) (writer : bool)
   | FdDevNull (rd wr : bool)
-  | FdUrandom.
+  | FdUrandom
+  | FdProcMaps (offset : word).
 
 (** Virtual-memory bookkeeping: a ledger of allocator decisions the model
     has already committed to (the flat byte-map memory can't encode
@@ -2984,8 +2985,11 @@ Record IoState := mkIoState {
        [Net.Socket.conn_channel] *)
 }.
 
-(** The interpreted file system. *)
-Record FsState := mkFsState { fsst_image : Fs.Fs }.
+(** The interpreted file system and the declared proc maps snapshot. *)
+Record FsState := mkFsState {
+  fsst_image : Fs.Fs;
+  fsst_proc_maps : option (list byte);
+}.
 
 (** The process's UNIX credentials.  Six ids, in the kernel's own
     grouping ([include/linux/cred.h], [struct cred]): the REAL id, which
@@ -3507,6 +3511,8 @@ Definition m_urandom (m : Model) : InputStream := iost_urandom (m_io m).
 Definition m_net (m : Model) : NetQueue := iost_net (m_io m).
 Definition m_conn_ix (m : Model) : word := iost_conn_ix (m_io m).
 Definition m_fs (m : Model) : Fs.Fs := fsst_image (m_fsys m).
+Definition m_proc_maps (m : Model) : option (list byte) :=
+  fsst_proc_maps (m_fsys m).
 Definition m_halted (m : Model) : option word := procst_halted (m_proc m).
 Definition m_tid (m : Model) : option word := procst_tid (m_proc m).
 Definition m_setsid_succeeded (m : Model) : bool :=
@@ -3572,7 +3578,7 @@ Definition mkModel (fds : list (word * FdEntry)) (vm : VmMaps)
     (stdin : InputStream) (fs : Fs.Fs) (halted : option word)
     (tid : option word) (rlim : option (list byte)) : Model :=
   mkModelOf (mkFdState fds []) (mkVmState vm [] [])
-            (mkIoState stdin IEof net_silent (Z_to_bv 64 0)) (mkFsState fs)
+            (mkIoState stdin IEof net_silent (Z_to_bv 64 0)) (mkFsState fs None)
             (mkProcState halted tid
                (mkCreds overflow_id overflow_id overflow_id
                         overflow_id overflow_id overflow_id [])
@@ -3644,7 +3650,7 @@ Definition statpins_restrict (fs : Fs.Fs) (ps : list (Fs.path * list byte))
                    end) ps.
 
 Definition with_fs (fs : Fs.Fs) (m : Model) : Model :=
-  mkModelOf (m_fd m) (m_vm m) (m_io m) (mkFsState fs)
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (mkFsState fs (m_proc_maps m))
             (mkProcState (m_halted m) (m_tid m) (m_creds m)
                          (m_setsid_succeeded m) (m_sigmask m)
                          (m_has_children m) (m_utsname m)
@@ -3653,6 +3659,10 @@ Definition with_fs (fs : Fs.Fs) (m : Model) : Model :=
                          (m_abort_terminal m)
                          (statpins_restrict fs (m_statpins m)))
             (m_lim m) (m_time m).
+
+Definition with_proc_maps (data : option (list byte)) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m)
+            (mkFsState (m_fs m) data) (m_proc m) (m_lim m) (m_time m).
 (** Halt the process by an EXIT, which is the other half of what the
     kill flag distinguishes: this clears it, so a model this produced has
     [m_killed] [None] whatever it had before.  Nothing can reach it with
@@ -4299,6 +4309,7 @@ Fixpoint pipe_end_live (fds : list (word * FdEntry)) (id : word)
   | (_, FdSocket _) :: r => pipe_end_live r id writer
   | (_, FdDevNull _ _) :: r => pipe_end_live r id writer
   | (_, FdUrandom) :: r => pipe_end_live r id writer
+  | (_, FdProcMaps _) :: r => pipe_end_live r id writer
   end.
 
 (** A 32-bit value as the four little-endian bytes the kernel's
@@ -5327,17 +5338,21 @@ Record ProcInput := mkProcInput_full {
 
        [Run.valid_input] has NO clause naming it: [fs_seed_tmp] seeds
        any list into the canonical form, so every value is one a launch
-       could present ([fs_seed_tmp_valid]). *)
+       could present ([fs_seed_tmp_valid]). *);
+  in_proc_maps : option (list byte)
+    (* A declared snapshot of /proc/self/maps.  [None] leaves the path
+       outside the model.  [Some bs] covers reads that observe [bs]
+       while the process mappings remain stable. *)
 }.
 
-(** THE POSITIONAL-LITERAL FORM: every field except the two ENVIRONMENT
-    fields at the end of the record ([in_urandom], [in_tmp]).
+(** THE POSITIONAL-LITERAL FORM: every field except the three ENVIRONMENT
+    fields at the end of the record ([in_urandom], [in_tmp], [in_proc_maps]).
 
     The record's own constructor is [mkProcInput_full] and takes every
     field.  This takes the first thirteen, in that order,
-    and fills the last two with THE DEFAULT RANDOM STREAM and
-    THE EMPTY /tmp: [default_urandom], which is zero bytes forever, and
-    a private /tmp that starts empty.  So a literal written through this
+    and fills the last three with THE DEFAULT RANDOM STREAM,
+    THE EMPTY /tmp, and NO MAPS SNAPSHOT: [default_urandom] is zero bytes
+    forever, and a private /tmp starts empty.  So a literal written through this
     name denotes an input in an environment
     that holds no file of its own.
 
@@ -5352,7 +5367,7 @@ Record ProcInput := mkProcInput_full {
     form under this name, and putting every new environment field at
     the END, is what makes an added field a compile error there rather
     than a re-spelling of every literal.  A NEW literal that wants to
-    set either field uses [mkProcInput_full] or the record-brace form;
+    set any of these fields uses [mkProcInput_full] or the record-brace form;
     this one cannot express them, which is the point.
 
     It is a plain (transparent) [Definition], so it reduces wherever the
@@ -5364,7 +5379,7 @@ Definition mkProcInput
     (nofile sigmask hwcap : word) (abort_terminal : bool)
     (va_size : VaSize) : ProcInput :=
   mkProcInput_full argv envp image_fs stdin uid gid groups net
-    nofile sigmask hwcap abort_terminal va_size default_urandom [].
+    nofile sigmask hwcap abort_terminal va_size default_urandom [] None.
 
 (** THE FILE SYSTEM THE RUN STARTS WITH: the image, with the run's
     declared private /tmp seeded into it under absolute keys.
@@ -5428,7 +5443,8 @@ Definition in_fs (inp : ProcInput) : Fs.Fs :=
 
 Definition init_model (reserved : list (word * word)) (brk0 mbase sp : word)
     (lim : Z) (inp : ProcInput) : Model :=
-  with_abort_terminal (in_abort_terminal inp)
+  with_proc_maps (in_proc_maps inp)
+  (with_abort_terminal (in_abort_terminal inp)
   (with_sigmask (in_sigmask inp)
   (with_nofile (in_nofile inp)
    (with_net (in_net inp)
@@ -5445,7 +5461,7 @@ Definition init_model (reserved : list (word * word)) (brk0 mbase sp : word)
        (in_fs inp)
        None
        None
-       None)))))).
+       None))))))).
 
 (** The base case of the nonemptiness invariant: a run starts with NO
     protected range at all.  Every reachable [vm_noaccess] is therefore

@@ -24,7 +24,7 @@ Definition ioctl_witness (fd req : word) (m : Model) : outcome SyscallEffect :=
   | Some (FdFileRW _ _) | Some (FdDevNull _ _) =>
       if tty_only_request req then ret_outcome (errno_ret ENOTTY) m
       else Unmodeled
-  | Some FdUrandom => Unmodeled
+  | Some FdUrandom | Some (FdProcMaps _) => Unmodeled
   end.
 
 Lemma ioctl_witness_ok : forall fd req i m, ioctl_spec fd req i m (ioctl_witness fd req m).

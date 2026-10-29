@@ -234,6 +234,7 @@ Definition getdents64_spec (fd count : word) : Sys SyscallEffect :=
                                               (fs/readdir.c) answers its opening -ENOTDIR *)
   | Some FdUrandom => err_ret ENOTDIR       (* and [urandom_fops] (drivers/char/random.c) has
                                               none either: the same -ENOTDIR *)
+  | Some (FdProcMaps _) => err_ret ENOTDIR
   | Some FdDir =>
       if getdents64_no_room count
       then alt (e <- errno_from getdents64_errnos ;; err_ret e)  (* the removed directory *)

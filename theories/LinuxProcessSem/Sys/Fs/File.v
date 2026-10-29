@@ -152,6 +152,7 @@ Definition dup_modeled_entry (e : FdEntry) : bool :=
      file]s on the random device draw from one generator.  Copying the
      entry loses nothing. *)
   | FdUrandom => true
+  | FdProcMaps _ => false  (* the open description carries a shared offset *)
   end.
 
 (** dup's injectable failures: fd-table exhaustion at RLIMIT_NOFILE
