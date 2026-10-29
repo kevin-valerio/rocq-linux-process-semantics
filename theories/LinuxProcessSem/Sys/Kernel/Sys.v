@@ -1074,10 +1074,10 @@ Definition uname_spec (name : word) : Sys SyscallEffect :=
     so widening the multiplexer is a change a proof reports rather than
     one a reader has to notice.  The obligation that pin carries is
     named there and is not restated here. *)
-Definition prctl_modeled_options : list Z := [PR_CAPBSET_READ].
+Definition prctl_modeled_options : list Z := [PR_CAPBSET_READ; PR_SET_VMA].
 
 (** [prctl(option, arg2, arg3, arg4, arg5)] — syscall 167, answered for
-    [PR_CAPBSET_READ] and for nothing else.
+    [PR_CAPBSET_READ] and [PR_SET_VMA].
 
     WHERE THE ANSWER COMES FROM, AND WHY IT IS NOT kernel/sys.c.
     [SYSCALL_DEFINE5(prctl)] opens with
@@ -1187,7 +1187,7 @@ Definition prctl_modeled_options : list Z := [PR_CAPBSET_READ].
     declining because it is what programs READ: libcap's [cap_max_bits]
     binary-searches it from a constructor.
 
-    EVERY OTHER OPTION IS [unmodeled], and one of them is load-bearing.
+    EVERY OPTION OUTSIDE THOSE TWO IS [unmodeled], and one is load-bearing.
     [PR_SET_TAGGED_ADDR_CTRL] (55) is one of the two callers of riscv's
     [set_tagged_addr_ctrl] (arch/riscv/kernel/process.c), and declining
     it is half of why [State.access_okb] is exact — the other half being
@@ -1201,7 +1201,60 @@ Definition prctl_modeled_options : list Z := [PR_CAPBSET_READ].
     a source that calls [prctl] with any other option cannot be
     certified by [Equivalence.strong_equiv], because [modeled] is an
     obligation to prove rather than one the source is let off. *)
+Definition anon_vma_name_char_b (b : byte) : bool :=
+  let c := bv_unsigned b in
+  (((31 <? c)%Z) && ((c <? 127)%Z)
+   && negb (existsb (Z.eqb c) [92%Z; 96%Z; 36%Z; 91%Z; 93%Z]))%bool.
+
+(** The modeled mappings are anonymous.  A range within one such mapping
+    reaches [madvise_update_vma] without a hole or a file-backed VMA. *)
+Definition prctl_vma_range_b (addr size : word) (m : Model) : bool :=
+  let a := bv_unsigned addr in
+  let n := bv_unsigned size in
+  (((0 <? n)%Z) && ((a mod page_size =? 0)%Z)
+   && ((n mod page_size =? 0)%Z)
+   && ((a + n <? TASK_SIZE)%Z)
+   && map_contains (vm_maps (m_vmmaps m)) addr size)%bool.
+
+(** This is the supported, short name and mapped range used by the
+    runtime.  Other shapes leave the enabled-kernel branch unmodeled. *)
+Definition prctl_vma_name_ready_b (i : SyscallInput) (m : Model) : bool :=
+  let name := in_arg i 4 in
+  negb (w_is0 name) &&
+  match read_cstr_aux (in_mem i) name 80%nat with
+  | CstrOk bs =>
+      forallb anon_vma_name_char_b bs &&
+      prctl_vma_range_b (in_arg i 2) (in_arg i 3) m
+  | _ => false
+  end.
+
+Definition prctl_vma_name_ret_b (r : word) : bool :=
+  (bv_eqb r (Z_to_bv 64 0)
+   || existsb (fun e => bv_eqb r (errno_ret e))
+        [ENOMEM; EAGAIN; EINTR])%bool.
+
+(** [PR_SET_VMA_ANON_NAME] may be absent at build time, in which case
+    the header stub returns -EINVAL before reading the name.  With the
+    option enabled, the short, valid name and mapped anonymous range
+    below can succeed.  Allocation and a killable mmap lock can fail.
+    Other argument shapes are left outside the model. *)
+Definition prctl_vma_name_spec (arg2 : word) : Sys SyscallEffect :=
+  if negb (w_is0 arg2) then err_ret EINVAL else
+  i <- input ;;
+  m <- get_model ;;
+  let name := in_arg i 4 in
+  if prctl_vma_name_ready_b i m then
+    alt (err_ret EINVAL)
+      (record_copyins
+        [(name, cstr_access_len_aux (in_mem i) name 80%nat)]
+        (r <- choose (fun r : word => prctl_vma_name_ret_b r = true) ;;
+         ret_only r))
+  else unmodeled.
+
 Definition prctl_spec (option_ arg2 : word) : Sys SyscallEffect :=
-  if negb (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ) then unmodeled
-  else if (CAP_LAST_CAP <? bv_unsigned arg2)%Z then err_ret EINVAL
-  else ret_only (Z_to_bv 64 1).
+  if Z.eqb (bv_unsigned option_) PR_CAPBSET_READ
+  then if (CAP_LAST_CAP <? bv_unsigned arg2)%Z
+       then err_ret EINVAL else ret_only (Z_to_bv 64 1)
+  else if Z.eqb (bv_unsigned option_) PR_SET_VMA
+       then prctl_vma_name_spec arg2
+       else unmodeled.
