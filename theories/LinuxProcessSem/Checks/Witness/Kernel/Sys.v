@@ -253,7 +253,7 @@ Proof.
   exact Hhi.
 Qed.
 
-Definition prlimit64_nofile_witness (pid new_rlim old_rlim : word)
+Definition prlimit64_nofile_read_witness (pid new_rlim old_rlim : word)
     (i : SyscallInput) (m : Model) : outcome SyscallEffect :=
   if negb (w_is0 pid) then Unmodeled
   else if negb (w_is0 new_rlim) then Unmodeled
@@ -274,12 +274,12 @@ Definition prlimit64_nofile_witness (pid new_rlim old_rlim : word)
         end
     end.
 
-Lemma prlimit64_nofile_witness_ok : forall pid new_rlim old_rlim i m,
-  prlimit64_nofile_spec pid new_rlim old_rlim i m
-    (prlimit64_nofile_witness pid new_rlim old_rlim i m).
+Lemma prlimit64_nofile_read_witness_ok : forall pid new_rlim old_rlim i m,
+  prlimit64_nofile_read_spec pid new_rlim old_rlim i m
+    (prlimit64_nofile_read_witness pid new_rlim old_rlim i m).
 Proof.
   intros pid new_rlim old_rlim i m.
-  unfold prlimit64_nofile_spec, prlimit64_nofile_witness.
+  unfold prlimit64_nofile_read_spec, prlimit64_nofile_read_witness.
   destruct (negb (w_is0 pid)); [apply unmodeled_intro|].
   destruct (negb (w_is0 new_rlim)); [apply unmodeled_intro|].
   destruct (w_is0 old_rlim); [apply unmodeled_intro|].
@@ -296,6 +296,74 @@ Proof.
     eapply bind_step; [apply modify_ok|]. apply pure_ok.
   - destruct (negb (access_okb old_rlim 16));
       [apply pure_ok|apply unmodeled_intro].
+Qed.
+
+Definition prlimit64_nofile_set_witness (pid new_rlim old_rlim : word)
+    (i : SyscallInput) (m : Model) : outcome SyscallEffect :=
+  if negb (w_is0 pid) then Unmodeled
+  else if w_is0 new_rlim then Unmodeled
+  else if negb (w_is0 old_rlim) then Unmodeled
+  else if negb (rlim64_nofile_ready_b m) then Unmodeled
+  else
+    match m_rlimit_nofile m with
+    | None => Unmodeled
+    | Some bs0 =>
+        match read_bytes_map (in_mem i) new_rlim (Z_to_bv 64 16) with
+        | None =>
+            if negb (access_okb new_rlim 16)
+            then ret_outcome (errno_ret EFAULT) m else Unmodeled
+        | Some nb =>
+            outcome_copyins [(new_rlim, 16%nat)]
+            (if (bv_unsigned (rlim64_hard nb) <?
+                 bv_unsigned (rlim64_soft nb))%Z
+             then ret_outcome (errno_ret EINVAL) m
+             else if negb (rlim64_nofile_go_raise_b bs0 nb m)
+                  then Unmodeled
+                  else ret_outcome (Z_to_bv 64 0)
+                         (with_nofile_pair (rlim64_soft nb) nb m))
+        end
+    end.
+
+Lemma prlimit64_nofile_set_witness_ok : forall pid new_rlim old_rlim i m,
+  prlimit64_nofile_set_spec pid new_rlim old_rlim i m
+    (prlimit64_nofile_set_witness pid new_rlim old_rlim i m).
+Proof.
+  intros pid new_rlim old_rlim i m.
+  unfold prlimit64_nofile_set_spec, prlimit64_nofile_set_witness.
+  destruct (negb (w_is0 pid)); [apply unmodeled_intro|].
+  destruct (w_is0 new_rlim); [apply unmodeled_intro|].
+  destruct (negb (w_is0 old_rlim)); [apply unmodeled_intro|].
+  eapply bind_step; [apply input_ok|]. cbv beta.
+  eapply bind_step; [apply get_model_ok|]. cbv beta.
+  destruct (negb (rlim64_nofile_ready_b m));
+    [apply unmodeled_intro|].
+  destruct (m_rlimit_nofile m) as [bs0|]; [|apply unmodeled_intro].
+  destruct (read_bytes_map (in_mem i) new_rlim (Z_to_bv 64 16)) as [nb|].
+  - apply record_copyins_outcome.
+    destruct ((bv_unsigned (rlim64_hard nb) <?
+               bv_unsigned (rlim64_soft nb))%Z); [apply pure_ok|].
+    destruct (negb (rlim64_nofile_go_raise_b bs0 nb m));
+      [apply unmodeled_intro|].
+    apply alt_r.
+    eapply bind_step; [apply modify_ok|]. apply pure_ok.
+  - destruct (negb (access_okb new_rlim 16));
+      [apply pure_ok|apply unmodeled_intro].
+Qed.
+
+Definition prlimit64_nofile_witness (pid new_rlim old_rlim : word)
+    (i : SyscallInput) (m : Model) : outcome SyscallEffect :=
+  if w_is0 new_rlim
+  then prlimit64_nofile_read_witness pid new_rlim old_rlim i m
+  else prlimit64_nofile_set_witness pid new_rlim old_rlim i m.
+
+Lemma prlimit64_nofile_witness_ok : forall pid new_rlim old_rlim i m,
+  prlimit64_nofile_spec pid new_rlim old_rlim i m
+    (prlimit64_nofile_witness pid new_rlim old_rlim i m).
+Proof.
+  intros. unfold prlimit64_nofile_spec, prlimit64_nofile_witness.
+  destruct (w_is0 new_rlim);
+    [apply prlimit64_nofile_read_witness_ok
+    |apply prlimit64_nofile_set_witness_ok].
 Qed.
 
 Definition prlimit64_witness (pid resource new_rlim old_rlim : word)

@@ -1829,7 +1829,8 @@ Lemma check_prlimit64_frame :
 Proof.
   intros i pid resource new_rlim old_rlim eff m m' evs H.
   unfold check_prlimit64, check_prlimit64_core, check_prlimit64_stack,
-    check_prlimit64_nofile, check_rlim64_read,
+    check_prlimit64_nofile, check_prlimit64_nofile_read,
+    check_prlimit64_nofile_set, check_rlim64_read,
     check_rlim64_stack_read, check_rlim64_nofile_read in H. vm_frame2 H.
 Qed.
 

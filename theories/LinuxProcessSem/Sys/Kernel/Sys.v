@@ -626,7 +626,7 @@ Definition rlim64_nofile_wf (bs : list byte) (m : Model) : bool :=
    && (bv_unsigned (m_nofile m) <=? bv_unsigned (rlim64_hard bs))%Z
    && (bv_unsigned (rlim64_hard bs) <=? 2 ^ 31 - 64)%Z)%bool.
 
-Definition prlimit64_nofile_spec (pid new_rlim old_rlim : word)
+Definition prlimit64_nofile_read_spec (pid new_rlim old_rlim : word)
     : Sys SyscallEffect :=
   if negb (w_is0 pid) then unmodeled
   else if negb (w_is0 new_rlim) then unmodeled
@@ -649,6 +649,58 @@ Definition prlimit64_nofile_spec (pid new_rlim old_rlim : word)
             pure (mkEffect (Z_to_bv 64 0) [(old_rlim, bs)] [])
         end
     end.
+
+(** Go's [syscall] initialization raises the inherited soft NOFILE limit
+    to [hard - 1] if the current soft limit is lower.  The first read pins
+    the inherited pair.  Keeping the hard limit unchanged needs no
+    CAP_SYS_RESOURCE; this model's standing no-LSM assumption applies.
+    The host may lower [fs.nr_open] after the process inherits its hard
+    limit.  Linux then returns -EPERM even for the same-hard update, so
+    both that failure and success are admissible until the host cap is
+    represented in state.  Other valid set shapes are outside this arm. *)
+Definition rlim64_nofile_go_raise_b (bs0 nb : list byte) (m : Model) : bool :=
+  (rlim64_nofile_wf bs0 m
+   && bv_eqb (rlim64_hard nb) (rlim64_hard bs0)
+   && (bv_unsigned (rlim64_soft nb) =?
+       bv_unsigned (rlim64_hard bs0) - 1)%Z
+   && (bv_unsigned (m_nofile m) <?
+       bv_unsigned (rlim64_soft nb))%Z)%bool.
+
+Definition prlimit64_nofile_set_spec (pid new_rlim old_rlim : word)
+    : Sys SyscallEffect :=
+  if negb (w_is0 pid) then unmodeled
+  else if w_is0 new_rlim then unmodeled
+  else if negb (w_is0 old_rlim) then unmodeled
+  else
+    i <- input ;;
+    m <- get_model ;;
+    if negb (rlim64_nofile_ready_b m) then unmodeled
+    else
+    match m_rlimit_nofile m with
+    | None => unmodeled
+    | Some bs0 =>
+        match read_bytes_map (in_mem i) new_rlim (Z_to_bv 64 16) with
+        | None =>
+            if negb (access_okb new_rlim 16) then err_ret EFAULT
+            else unmodeled
+        | Some nb =>
+            record_copyins [(new_rlim, 16%nat)]
+            (if (bv_unsigned (rlim64_hard nb) <?
+                 bv_unsigned (rlim64_soft nb))%Z
+             then err_ret EINVAL
+             else if negb (rlim64_nofile_go_raise_b bs0 nb m)
+                  then unmodeled
+                  else alt (err_ret EPERM)
+                           (modify (with_nofile_pair (rlim64_soft nb) nb) ;;
+                            ret_only (Z_to_bv 64 0)))
+        end
+    end.
+
+Definition prlimit64_nofile_spec (pid new_rlim old_rlim : word)
+    : Sys SyscallEffect :=
+  if w_is0 new_rlim
+  then prlimit64_nofile_read_spec pid new_rlim old_rlim
+  else prlimit64_nofile_set_spec pid new_rlim old_rlim.
 
 Definition prlimit64_spec (pid resource new_rlim old_rlim : word)
     : Sys SyscallEffect :=
