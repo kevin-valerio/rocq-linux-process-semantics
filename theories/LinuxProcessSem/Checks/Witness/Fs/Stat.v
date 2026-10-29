@@ -294,6 +294,44 @@ Proof.
     [apply stat_urandom_witness_base_wf | apply stat_urandom_witness_base_ok].
 Qed.
 
+Definition stat_proc_maps_witness_base : list byte :=
+  Z_to_le_bytes 16 0 ++ Z_to_le_bytes 4 (S_IFREG + 292)
+  ++ Z_to_le_bytes 4 1 ++ Z_to_le_bytes 104 0.
+
+Lemma stat_proc_maps_witness_base_wf :
+  stat_buf_wf stat_proc_maps_witness_base = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma stat_proc_maps_witness_base_ok :
+  stat_proc_maps_ok stat_proc_maps_witness_base = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Definition fstat_proc_maps_witness (statbuf : word) (i : SyscallInput)
+    (m : Model) : outcome SyscallEffect :=
+  if negb (access_okb statbuf STAT_SIZE)
+  then ret_outcome (errno_ret EFAULT) m
+  else match read_bytes_map (in_wmem i) statbuf (Z_to_bv 64 STAT_SIZE) with
+       | None => Unmodeled
+       | Some _ => Ok (mkEffect (Z_to_bv 64 0)
+                         [(statbuf, stat_proc_maps_witness_base)] []) m []
+       end.
+
+Lemma fstat_proc_maps_witness_ok : forall statbuf i m,
+  fstat_proc_maps_spec statbuf i m (fstat_proc_maps_witness statbuf i m).
+Proof.
+  intros statbuf i m. unfold fstat_proc_maps_spec, fstat_proc_maps_witness.
+  eapply bind_step; [apply input_ok|]. cbv beta.
+  destruct (negb (access_okb statbuf STAT_SIZE)) eqn:Ha; cbv iota.
+  - unfold err_ret, ret_only, ret_outcome. apply pure_ok.
+  - destruct (read_bytes_map (in_wmem i) statbuf (Z_to_bv 64 STAT_SIZE))
+      as [w|] eqn:Hw; cbv iota; [|apply unmodeled_intro].
+    eapply bind_step;
+      [apply (choose_ok _ stat_proc_maps_witness_base); split;
+       [apply stat_proc_maps_witness_base_wf
+       |apply stat_proc_maps_witness_base_ok]|].
+    apply pure_ok.
+Qed.
+
 (** fstat (80) — -EBADF on a descriptor the process does not hold, a
     delivered [struct stat] on the four file kinds and on the two device
     kinds, and [Unmodeled] on the other four. *)
@@ -311,6 +349,8 @@ Definition fstat_witness (fd statbuf : word) (i : SyscallInput) (m : Model)
   | Some (FdPipe _ _)  => Unmodeled
   | Some (FdDevNull _ _) => fstat_devnull_witness statbuf i m
   | Some FdUrandom => fstat_urandom_witness statbuf i m
+  | Some (FdProcMaps _) => fstat_proc_maps_witness statbuf i m
+  | Some (FdHpagePmdSize _) => Unmodeled
   end.
 
 Lemma fstat_witness_ok : forall fd statbuf i m,
@@ -322,7 +362,8 @@ Proof.
     [destruct e; cbv iota;
        first [apply unmodeled_intro | apply fstat_file_witness_ok
              | apply fstat_devnull_witness_ok
-             | apply fstat_urandom_witness_ok]
+             | apply fstat_urandom_witness_ok
+             | apply fstat_proc_maps_witness_ok]
     |unfold ret_outcome; apply pure_ok].
 Qed.
 

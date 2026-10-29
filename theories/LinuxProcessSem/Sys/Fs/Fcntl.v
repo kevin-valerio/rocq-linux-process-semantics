@@ -174,6 +174,8 @@ Definition setfl_acted_on : Z :=
 Definition setfl_noop_on (e : FdEntry) (arg : word) : bool :=
   match e with
   | FdChannel _ => false
+  | FdProcMaps _ => false
+  | FdHpagePmdSize _ => false
   | FdFile _ _ | FdFileW _ _ | FdFileRW _ _ | FdDir | FdSocket _ =>
       Z.eqb (Z.land (bv_unsigned arg) setfl_acted_on) 0
   | FdFileA _ _ => false
@@ -482,6 +484,8 @@ Proof. vm_compute. reflexivity. Qed.
     [init_file]; net/socket.c [sock_alloc_file].) *)
 Definition getfl_f_flags (e : FdEntry) : option word :=
   match e with
+  | FdProcMaps _ => None
+  | FdHpagePmdSize _ => None
   | FdSocket _ => Some (Z_to_bv 64 socket_f_flags)
   | FdChannel _ | FdFile _ _ | FdFileW _ _ | FdDir => None
   | FdFileRW _ _ => None

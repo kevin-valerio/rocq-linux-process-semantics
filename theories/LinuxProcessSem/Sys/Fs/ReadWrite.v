@@ -340,6 +340,64 @@ Definition read_urandom (buf count : word) (i : SyscallInput) (m : Model)
       end
   end.
 
+(** seq_read_iter may return a short read when its internal record buffer
+    fills.  When the declared snapshot is shorter than one page, every
+    record fits and a successful read delivers exactly the requested
+    prefix, or the remaining bytes at EOF.  Larger snapshots and partial
+    destinations are outside this model. *)
+Definition read_proc_maps_spec (fd buf count off : word)
+    (i : SyscallInput) (m : Model) : Sys SyscallEffect :=
+  if negb (access_okb buf (bv_unsigned count)) then err_ret EFAULT
+  else match m_proc_maps m with
+       | None => unmodeled
+       | Some data =>
+           let available := file_read data off
+                              (Z_to_bv 64 (rw_count_clamp count)) in
+           match available with
+           | [] => ret_only (Z_to_bv 64 0)
+           | _ :: _ =>
+               if (Z.of_nat (length data) <? page_size)%Z then
+               match read_bytes_map (in_wmem i) buf (Z_to_bv 64 1) with
+               | None => err_ret EFAULT
+               | Some _ =>
+                   match read_bytes_map (in_wmem i) buf (len_word available) with
+                   | None => unmodeled
+                   | Some _ =>
+                       set_fds (fd_insert (m_fds m) fd
+                                  (FdProcMaps (off + len_word available))) ;;
+                       pure (mkEffect (len_word available) [(buf, available)] [])
+                   end
+               end
+               else unmodeled
+           end
+       end.
+
+(** The sysfs show method emits the fixed text [2097152\n] on this
+    RISC-V model.  kernfs serves it through a single seq_file record;
+    the offset and destination rules are the same as the short maps
+    snapshot above. *)
+Definition read_hpage_pmd_size_spec (fd buf count off : word)
+    (i : SyscallInput) (m : Model) : Sys SyscallEffect :=
+  if negb (access_okb buf (bv_unsigned count)) then err_ret EFAULT
+  else
+  let available := file_read hpage_pmd_size_bytes off
+                     (Z_to_bv 64 (rw_count_clamp count)) in
+  match available with
+  | [] => ret_only (Z_to_bv 64 0)
+  | _ :: _ =>
+      match read_bytes_map (in_wmem i) buf (Z_to_bv 64 1) with
+      | None => err_ret EFAULT
+      | Some _ =>
+          match read_bytes_map (in_wmem i) buf (len_word available) with
+          | None => unmodeled
+          | Some _ =>
+              set_fds (fd_insert (m_fds m) fd
+                         (FdHpagePmdSize (off + len_word available))) ;;
+              pure (mkEffect (len_word available) [(buf, available)] [])
+          end
+      end
+  end.
+
 (** Neither this spec nor [write_spec] has an -EINTR outcome, so an
     interrupted transfer is REJECTED rather than declined. *)
 Definition read_spec (fd buf count : word) : Sys SyscallEffect :=
@@ -722,6 +780,8 @@ Definition read_spec (fd buf count : word) : Sys SyscallEffect :=
                  queue [word_to_nat count] would have left *)
           end
       end
+  | Some (FdProcMaps off) => read_proc_maps_spec fd buf count off i m
+  | Some (FdHpagePmdSize off) => read_hpage_pmd_size_spec fd buf count off i m
   end.
 
 (** [write fd buf count].
@@ -912,6 +972,8 @@ Definition write_spec (fd buf count : word) : Sys SyscallEffect :=
   match fd_lookup (m_fds m) fd with
   | None => err_ret EBADF                        (* fd not open: real -EBADF, not a modeling gap *)
   | Some (FdFile _ _) => err_ret EBADF           (* fd open read-only: real -EBADF *)
+  | Some (FdProcMaps _) => err_ret EBADF
+  | Some (FdHpagePmdSize _) => err_ret EBADF
   | Some FdUrandom => err_ret EBADF             (* every descriptor of this kind is O_RDONLY —
                                                     the open declines the write words — so
                                                     [vfs_write]'s FMODE_WRITE test (fs/read_write.c,
@@ -1388,6 +1450,8 @@ Definition pread64_spec (fd buf count pos : word) : Sys SyscallEffect :=
                                                     O_WRONLY here, so FMODE_READ is clear and the
                                                     same test answers.  Where the write lands never
                                                     comes up, because nothing reads *)
+  | Some (FdProcMaps _) => unmodeled
+  | Some (FdHpagePmdSize _) => unmodeled
   | Some (FdDevNull rd _) =>
       if negb rd then err_ret EBADF              (* FMODE_PREAD is set on a character device
                                                     ([do_dentry_open] sets it and [memory_open]
@@ -1535,6 +1599,8 @@ Definition pwrite64_spec (fd buf count pos : word) : Sys SyscallEffect :=
                                                     unmodeled is unreachable through pwrite *)
   | Some (FdFile _ _) => err_ret EBADF           (* fd open read-only: [vfs_write]'s FMODE_WRITE
                                                     test, fs/read_write.c:670-671 *)
+  | Some (FdProcMaps _) => err_ret EBADF
+  | Some (FdHpagePmdSize _) => err_ret EBADF
   | Some FdUrandom => err_ret EBADF             (* FMODE_PWRITE is set on the device, so this
                                                     reaches [vfs_write]'s FMODE_WRITE test, which a
                                                     read-only descriptor fails: -EBADF before the
@@ -1885,6 +1951,8 @@ Definition writev_spec (fd iov iovcnt : word) : Sys SyscallEffect :=
   | Some FdUrandom => err_ret EBADF             (* O_RDONLY, always: [vfs_writev]'s FMODE_WRITE
                                                     test (fs/read_write.c, v6.18.46), before the
                                                     iovec array is imported *)
+  | Some (FdProcMaps _) => err_ret EBADF
+  | Some (FdHpagePmdSize _) => err_ret EBADF
   | Some (FdDevNull _ wr) =>
       if negb wr then err_ret EBADF              (* O_RDONLY: [vfs_writev]'s FMODE_WRITE test,
                                                     before the import *)
@@ -2010,10 +2078,12 @@ Inductive ReadableFd : Type :=
   | RdDevNull
   (** /dev/null opened for reading.  It carries nothing because the
       read arm consults nothing: [read_iter_null] returns 0. *)
-  | RdUrandom.
+  | RdUrandom
   (** /dev/urandom, which is only ever open for reading.  It carries
       nothing because the stream it would read is the model's
       ([State.m_urandom]), not the descriptor's. *)
+  | RdProcMaps
+  | RdHpagePmdSize.
 
 (** [FMODE_READ] (fs/read_write.c [vfs_readv]'s first test, v6.18.46):
     an fd not open for reading is [-EBADF], decided BEFORE the iovec
@@ -2066,6 +2136,8 @@ Definition readable_fd (e : FdEntry) : option ReadableFd :=
   | FdUrandom => Some RdUrandom
     (* opened O_RDONLY by construction, so FMODE_READ is set on every
        descriptor of the kind *)
+  | FdProcMaps _ => Some RdProcMaps
+  | FdHpagePmdSize _ => Some RdHpagePmdSize
   end.
 
 (** Linux keeps eight iovecs on the syscall stack ([UIO_FASTIOV],
@@ -2279,6 +2351,8 @@ Definition readv_imported (fd : word) (r : ReadableFd)
          with the same partial-destination decline.  Not written, so the
          vectored read declines through [readv_buf_gap] rather than
          guess at a scatter; [read_urandom] is the scalar answer *)
+  | RdProcMaps => readv_buf_gap
+  | RdHpagePmdSize => readv_buf_gap
   | RdDir => err_ret EISDIR
       (* fs/libfs.c [generic_read_dir] (v6.18.46), reached through
          fs/read_write.c [do_loop_readv_writev] because a directory's
@@ -2538,6 +2612,8 @@ Definition lseek_spec (fd off whence : word) : Sys SyscallEffect :=
                                                     descriptor shares the same 0.  FMODE_LSEEK is
                                                     set because the table has an [.llseek], so
                                                     [vfs_llseek] dispatches rather than -ESPIPE *)
+      | FdProcMaps _ => unmodeled
+      | FdHpagePmdSize _ => unmodeled
       | FdDir => unmodeled                           (* real lseek on a directory fd succeeds, but [FdDir]
                                                     tracks no offset, so the model cannot judge the
                                                     call: unmodeled, fail closed *)

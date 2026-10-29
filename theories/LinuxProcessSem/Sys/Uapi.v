@@ -243,6 +243,28 @@ Definition urandom_path : path :=
    Z_to_bv 8 117; Z_to_bv 8 114; Z_to_bv 8 97; Z_to_bv 8 110; Z_to_bv 8 100;
    Z_to_bv 8 111; Z_to_bv 8 109].
 
+(** The process's virtual maps file, shared by openat and fstat. *)
+Definition proc_self_maps_path : path :=
+  map (Z_to_bv 8)
+    [47%Z; 112%Z; 114%Z; 111%Z; 99%Z; 47%Z; 115%Z; 101%Z;
+     108%Z; 102%Z; 47%Z; 109%Z; 97%Z; 112%Z; 115%Z].
+
+(** The transparent hugepage size attribute under sysfs.  The RISC-V
+    PMD_SHIFT is 21, so HPAGE_PMD_SIZE is 2097152 bytes.  The sysfs
+    show function prints that value followed by a newline. *)
+Definition hpage_pmd_size_path : path :=
+  map (Z_to_bv 8)
+    [47%Z; 115%Z; 121%Z; 115%Z; 47%Z; 107%Z; 101%Z; 114%Z;
+     110%Z; 101%Z; 108%Z; 47%Z; 109%Z; 109%Z; 47%Z; 116%Z;
+     114%Z; 97%Z; 110%Z; 115%Z; 112%Z; 97%Z; 114%Z; 101%Z;
+     110%Z; 116%Z; 95%Z; 104%Z; 117%Z; 103%Z; 101%Z; 112%Z;
+     97%Z; 103%Z; 101%Z; 47%Z; 104%Z; 112%Z; 97%Z; 103%Z;
+     101%Z; 95%Z; 112%Z; 109%Z; 100%Z; 95%Z; 115%Z; 105%Z;
+     122%Z; 101%Z].
+
+Definition hpage_pmd_size_bytes : list byte :=
+  map (Z_to_bv 8) [50%Z; 48%Z; 57%Z; 55%Z; 49%Z; 53%Z; 50%Z; 10%Z].
+
 (* =========================================================================
    Sockets: constants, argument decoding, and the trace channel
    ========================================================================= *)
@@ -1227,6 +1249,15 @@ Definition stat_devnull_ok (bs : list byte) : bool := stat_chrdev_ok DEVNULL_RDE
 Definition URANDOM_RDEV : Z := 265%Z.
 
 Definition stat_urandom_ok (bs : list byte) : bool := stat_chrdev_ok URANDOM_RDEV bs.
+
+(** /proc/self/maps is a procfs regular inode with 0444 permissions.
+    Its read data is generated on demand; inode_init_always starts its
+    size and block count at zero, and proc_pid_make_inode does not alter
+    either.  REG("maps", S_IRUGO, ...) supplies the mode. *)
+Definition stat_proc_maps_ok (bs : list byte) : bool :=
+  (Z.eqb (stat_field_le ST_MODE_OFF 4 bs) (S_IFREG + 292)
+   && Z.eqb (stat_field_le ST_SIZE_OFF 8 bs) 0
+   && Z.eqb (stat_field_le ST_BLOCKS_OFF 8 bs) 0)%bool.
 
 (** Byte-list equality, for comparing a delivered [struct stat] against
     a pin.  [Fs.path_eqb] is the same function over the same type; a
