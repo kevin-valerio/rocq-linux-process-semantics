@@ -163,72 +163,215 @@ Definition check_uname (i : SyscallInput) (name : word)
     | Some _ => check_uname_copy name (m_utsname m) eff m
     end.
 
-(** prctl: [Kernel.Sys.prctl_spec] carries the whole argument -- why
-    only [PR_CAPBSET_READ], why its answer is the constant 1 rather than
-    a choice, and why every other option declines.  This mirrors its
-    three branches one for one.  TOTAL ON ITS OWN OPTION: once the
-    option is [PR_CAPBSET_READ] this answers [CheckOk] or [CheckReject]
-    and never [CheckUnmodeled], so the decline is a fact about the
-    OPTION and about nothing else -- which is what makes
-    [Checks.ProcessCreation]'s pin on [prctl_modeled_options] the whole
-    story about what 167 declines. *)
+(** [PR_CAPBSET_READ] has a fixed return.  [PR_SET_VMA] records the
+    runtime's name read and accepts the configured-kernel outcomes. *)
 
-Definition check_prctl (option_ arg2 : word) (eff : SyscallEffect) (m : Model)
+Definition check_prctl_vma_name (i : SyscallInput) (arg2 : word)
+    (eff : SyscallEffect) (m : Model) : check_result :=
+  if negb (w_is0 arg2) then check_ret_only eff (errno_ret EINVAL) m []
+  else if negb (prctl_vma_name_ready_b i m) then CheckUnmodeled
+  else if bv_eqb (eff_ret eff) (errno_ret EINVAL)
+       then check_ret_only eff (errno_ret EINVAL) m []
+       else if prctl_vma_name_ret_b (eff_ret eff)
+            then check_ret_only_copyins
+                   [(in_arg i 4,
+                     cstr_access_len_aux (in_mem i) (in_arg i 4) 80%nat)]
+                   eff (eff_ret eff) m []
+            else CheckReject.
+
+Definition check_prctl (i : SyscallInput) (option_ arg2 : word)
+    (eff : SyscallEffect) (m : Model)
     : check_result :=
-  if negb (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ) then CheckUnmodeled
-  else if (CAP_LAST_CAP <? bv_unsigned arg2)%Z
-  then check_ret_only eff (errno_ret EINVAL) m []
-  else check_ret_only eff (Z_to_bv 64 1) m [].
+  if Z.eqb (bv_unsigned option_) PR_CAPBSET_READ
+  then if (CAP_LAST_CAP <? bv_unsigned arg2)%Z
+       then check_ret_only eff (errno_ret EINVAL) m []
+       else check_ret_only eff (Z_to_bv 64 1) m []
+  else if Z.eqb (bv_unsigned option_) PR_SET_VMA
+       then check_prctl_vma_name i arg2 eff m
+       else CheckUnmodeled.
+
+Lemma check_prctl_vma_name_sound_ok : forall i arg2 eff m m' evs,
+  check_prctl_vma_name i arg2 eff m = CheckOk m' evs ->
+  prctl_vma_name_spec arg2 i m (Ok eff m' evs).
+Proof.
+  intros i arg2 eff m m' evs H.
+  unfold check_prctl_vma_name in H.
+  unfold prctl_vma_name_spec.
+  destruct (negb (w_is0 arg2)) eqn:Harg.
+  { apply check_ret_only_ok_iff in H as (-> & -> & ->).
+    unfold err_ret, ret_only. apply pure_ok. }
+  eapply bind_ok0; [apply input_ok|]. cbv beta.
+  eapply bind_ok0; [apply get_model_ok|]. cbv beta.
+  destruct (negb (prctl_vma_name_ready_b i m)) eqn:Hready;
+    [discriminate|].
+  apply Bool.negb_false_iff in Hready. rewrite Hready.
+  destruct (bv_eqb (eff_ret eff) (errno_ret EINVAL)) eqn:He.
+  - apply check_ret_only_ok_iff in H as (-> & -> & ->).
+    apply alt_l. unfold err_ret, ret_only. apply pure_ok.
+  - destruct (prctl_vma_name_ret_b (eff_ret eff)) eqn:Hr;
+      [|discriminate].
+    apply check_ret_only_copyins_ok_iff in H as (Heff & -> & ->).
+    rewrite Heff. apply alt_r.
+    apply record_copyins_ok_empty; [reflexivity|].
+    eapply bind_ok0; [apply (choose_ok _ (eff_ret eff)); exact Hr|].
+    unfold ret_only. apply pure_ok.
+Qed.
+
+Lemma check_prctl_vma_name_sound_unmodeled : forall i arg2 eff m,
+  check_prctl_vma_name i arg2 eff m = CheckUnmodeled ->
+  prctl_vma_name_spec arg2 i m Unmodeled.
+Proof.
+  intros i arg2 eff m H.
+  unfold check_prctl_vma_name in H.
+  unfold prctl_vma_name_spec.
+  destruct (negb (w_is0 arg2)) eqn:Harg.
+  { now apply check_ret_only_no_unmodeled in H. }
+  eapply bind_unmodeled2; [apply input_ok|]. cbv beta.
+  eapply bind_unmodeled2; [apply get_model_ok|]. cbv beta.
+  destruct (negb (prctl_vma_name_ready_b i m)) eqn:Hready.
+  - apply Bool.negb_true_iff in Hready. rewrite Hready.
+    apply unmodeled_intro.
+  - destruct (bv_eqb (eff_ret eff) (errno_ret EINVAL)).
+    + now apply check_ret_only_no_unmodeled in H.
+    + destruct (prctl_vma_name_ret_b (eff_ret eff));
+        [now apply check_ret_only_copyins_no_unmodeled in H|discriminate].
+Qed.
 
 Lemma check_prctl_sound_ok : forall option_ arg2 eff m m' evs i,
-  check_prctl option_ arg2 eff m = CheckOk m' evs ->
+  check_prctl i option_ arg2 eff m = CheckOk m' evs ->
   prctl_spec option_ arg2 i m (Ok eff m' evs).
 Proof.
   intros option_ arg2 eff m m' evs i H.
   unfold check_prctl in H. unfold prctl_spec.
-  destruct (negb (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ)); [discriminate|].
-  destruct ((CAP_LAST_CAP <? bv_unsigned arg2)%Z);
-    apply check_ret_only_ok_iff in H; destruct H as (-> & -> & ->);
-    apply pure_ok.
+  destruct (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ).
+  - destruct ((CAP_LAST_CAP <? bv_unsigned arg2)%Z);
+      apply check_ret_only_ok_iff in H; destruct H as (-> & -> & ->);
+      apply pure_ok.
+  - destruct (Z.eqb (bv_unsigned option_) PR_SET_VMA).
+    + now apply check_prctl_vma_name_sound_ok.
+    + discriminate.
 Qed.
 
-(** The option test is the ONLY thing that declines, so a [CheckUnmodeled]
-    forces the same branch in the spec. *)
 Lemma check_prctl_sound_unmodeled : forall option_ arg2 eff m i,
-  check_prctl option_ arg2 eff m = CheckUnmodeled ->
+  check_prctl i option_ arg2 eff m = CheckUnmodeled ->
   prctl_spec option_ arg2 i m Unmodeled.
 Proof.
   intros option_ arg2 eff m i H.
   unfold check_prctl in H. unfold prctl_spec.
-  destruct (negb (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ));
-    [apply unmodeled_intro|].
-  destruct ((CAP_LAST_CAP <? bv_unsigned arg2)%Z);
-    now apply check_ret_only_no_unmodeled in H.
+  destruct (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ).
+  - destruct ((CAP_LAST_CAP <? bv_unsigned arg2)%Z);
+      now apply check_ret_only_no_unmodeled in H.
+  - destruct (Z.eqb (bv_unsigned option_) PR_SET_VMA).
+    + eapply check_prctl_vma_name_sound_unmodeled; eassumption.
+    + apply unmodeled_intro.
+Qed.
+
+Lemma prctl_vma_name_ret_ne_einval : forall r,
+  prctl_vma_name_ret_b r = true ->
+  bv_eqb r (errno_ret EINVAL) = false.
+Proof.
+  intros r Hr. destruct (bv_eqb r (errno_ret EINVAL)) eqn:He;
+    [|reflexivity].
+  apply bv_eqb_eq in He. subst r.
+  vm_compute in Hr. discriminate.
+Qed.
+
+Lemma prctl_vma_name_copyin_ok_inv : forall reads i m eff m' evs,
+  record_copyins reads
+    (r <- choose (fun r : word => prctl_vma_name_ret_b r = true) ;;
+     ret_only r) i m (Ok eff m' evs) ->
+  exists r, prctl_vma_name_ret_b r = true /\
+    eff = with_copyins reads (mkEffect r [] []) /\
+    m' = m /\ evs = [].
+Proof.
+  intros reads i m eff m' evs H.
+  apply record_copyins_ok_inv in H as (core & Hcore & Heff).
+  unfold bind, choose, ret_only, pure in Hcore.
+  destruct Hcore as (r & m1 & evs1 & evs2 & Hchoose & Hpure & Hevs).
+  destruct Hchoose as (r0 & Hr & Hchosen).
+  inversion Hchosen; subst m1 evs1 r.
+  inversion Hpure; subst m' evs2 core.
+  exists r0. split; [exact Hr|].
+  split.
+  - cbn in Heff. now rewrite app_nil_r in Heff.
+  - split; [reflexivity|now subst evs].
+Qed.
+
+Lemma check_prctl_vma_name_complete_ok : forall i arg2 eff m m' evs,
+  prctl_vma_name_spec arg2 i m (Ok eff m' evs) ->
+  check_prctl_vma_name i arg2 eff m = CheckOk m' evs.
+Proof.
+  intros i arg2 eff m m' evs H.
+  unfold prctl_vma_name_spec in H.
+  destruct (negb (w_is0 arg2)) eqn:Harg.
+  - unfold err_ret, ret_only, pure in H. inversion H; subst.
+    unfold check_prctl_vma_name. rewrite Harg.
+    now apply (proj2 (check_ret_only_ok_iff _ _ _ _ _ _));
+      repeat split.
+  - apply input_bind_ok_inv in H.
+    apply get_model_bind_ok_inv in H.
+    destruct (prctl_vma_name_ready_b i m) eqn:Hready;
+      [|unfold unmodeled in H; discriminate H].
+    unfold alt in H. destruct H as [H|H].
+    + unfold err_ret, ret_only, pure in H. inversion H; subst.
+      unfold check_prctl_vma_name. rewrite Harg, Hready.
+      cbn. rewrite bv_eqb_refl.
+      reflexivity.
+    + apply prctl_vma_name_copyin_ok_inv in H
+        as (r & Hr & Heff & -> & ->). subst eff.
+      unfold check_prctl_vma_name. rewrite Harg, Hready.
+      cbn. rewrite (prctl_vma_name_ret_ne_einval r Hr), Hr.
+      apply check_ret_only_copyins_refl.
+Qed.
+
+Lemma check_prctl_vma_name_complete_unmodeled : forall i arg2 m eff,
+  prctl_vma_name_spec arg2 i m Unmodeled ->
+  check_prctl_vma_name i arg2 eff m = CheckUnmodeled.
+Proof.
+  intros i arg2 m eff H.
+  unfold prctl_vma_name_spec in H.
+  destruct (negb (w_is0 arg2)) eqn:Harg.
+  - unfold err_ret, ret_only, pure in H. discriminate H.
+  - apply input_bind_unmodeled_inv in H.
+    apply get_model_bind_unmodeled_inv in H.
+    destruct (prctl_vma_name_ready_b i m) eqn:Hready.
+    + unfold alt in H. destruct H as [H|H].
+      * unfold err_ret, ret_only, pure in H. discriminate H.
+      * apply record_copyins_unmodeled_inv in H.
+        unfold bind, choose, ret_only, pure in H.
+        destruct H as [H|(r & m1 & evs1 & _ & H)];
+          [destruct H as (r & _ & H)|]; discriminate H.
+    + unfold check_prctl_vma_name. now rewrite Harg, Hready.
 Qed.
 
 Lemma check_prctl_complete_ok : forall option_ arg2 eff m m' evs i,
   prctl_spec option_ arg2 i m (Ok eff m' evs) ->
-  check_prctl option_ arg2 eff m = CheckOk m' evs.
+  check_prctl i option_ arg2 eff m = CheckOk m' evs.
 Proof.
   intros option_ arg2 eff m m' evs i H.
   unfold prctl_spec in H. unfold check_prctl.
-  destruct (negb (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ));
-    [now inversion H|].
-  destruct ((CAP_LAST_CAP <? bv_unsigned arg2)%Z);
-    unfold err_ret, ret_only, pure in H; inversion H; subst;
-    cbn; rewrite bv_eqb_refl; reflexivity.
+  destruct (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ).
+  - destruct ((CAP_LAST_CAP <? bv_unsigned arg2)%Z);
+      unfold err_ret, ret_only, pure in H; inversion H; subst;
+      cbn; rewrite bv_eqb_refl; reflexivity.
+  - destruct (Z.eqb (bv_unsigned option_) PR_SET_VMA).
+    + now apply check_prctl_vma_name_complete_ok.
+    + inversion H.
 Qed.
 
 Lemma check_prctl_complete_unmodeled : forall option_ arg2 m i eff,
   prctl_spec option_ arg2 i m Unmodeled ->
-  check_prctl option_ arg2 eff m = CheckUnmodeled.
+  check_prctl i option_ arg2 eff m = CheckUnmodeled.
 Proof.
   intros option_ arg2 m i eff H.
   unfold prctl_spec in H. unfold check_prctl.
-  destruct (negb (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ)); [reflexivity|].
-  exfalso.
-  destruct ((CAP_LAST_CAP <? bv_unsigned arg2)%Z);
-    unfold err_ret, ret_only, pure in H; discriminate H.
+  destruct (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ).
+  - exfalso.
+    destruct ((CAP_LAST_CAP <? bv_unsigned arg2)%Z);
+      unfold err_ret, ret_only, pure in H; discriminate H.
+  - destruct (Z.eqb (bv_unsigned option_) PR_SET_VMA).
+    + eapply check_prctl_vma_name_complete_unmodeled; eassumption.
+    + reflexivity.
 Qed.
 
 (* =========================================================================

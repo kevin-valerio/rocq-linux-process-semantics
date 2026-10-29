@@ -271,23 +271,34 @@ Proof.
             | apply pure_ok ]) ].
 Qed.
 
-(** prctl witness: the arm's own answer, which is deterministic.
-    [Kernel.Sys.prctl_spec] has no [alt] and no [choose] -- an option
-    outside [prctl_modeled_options] declines, and [PR_CAPBSET_READ]
-    answers -EINVAL or 1 by a test on [arg2] alone -- so the witness is
-    the spec with the monad erased. *)
-Definition prctl_witness (option_ arg2 : word) (m : Model)
+(** The VMA witness picks -EINVAL when the build configuration may
+    disable anonymous VMA names.  The capability arm has a fixed answer. *)
+Definition prctl_witness (i : SyscallInput) (option_ arg2 : word) (m : Model)
     : outcome SyscallEffect :=
-  if negb (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ) then Unmodeled
-  else if (CAP_LAST_CAP <? bv_unsigned arg2)%Z
-  then ret_outcome (errno_ret EINVAL) m
-  else ret_outcome (Z_to_bv 64 1) m.
+  if Z.eqb (bv_unsigned option_) PR_CAPBSET_READ
+  then if (CAP_LAST_CAP <? bv_unsigned arg2)%Z
+       then ret_outcome (errno_ret EINVAL) m
+       else ret_outcome (Z_to_bv 64 1) m
+  else if Z.eqb (bv_unsigned option_) PR_SET_VMA
+       then if negb (w_is0 arg2) then ret_outcome (errno_ret EINVAL) m
+            else if prctl_vma_name_ready_b i m
+                 then ret_outcome (errno_ret EINVAL) m
+                 else Unmodeled
+       else Unmodeled.
 
 Lemma prctl_witness_ok : forall option_ arg2 i m,
-  prctl_spec option_ arg2 i m (prctl_witness option_ arg2 m).
+  prctl_spec option_ arg2 i m (prctl_witness i option_ arg2 m).
 Proof.
   intros option_ arg2 i m. unfold prctl_spec, prctl_witness.
-  destruct (negb (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ));
-    [apply unmodeled_intro|].
-  destruct ((CAP_LAST_CAP <? bv_unsigned arg2)%Z); apply pure_ok.
+  destruct (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ).
+  - destruct ((CAP_LAST_CAP <? bv_unsigned arg2)%Z); apply pure_ok.
+  - destruct (Z.eqb (bv_unsigned option_) PR_SET_VMA).
+    + unfold prctl_vma_name_spec.
+      destruct (negb (w_is0 arg2)); [apply pure_ok|].
+      eapply bind_step; [apply input_ok|]. cbv beta.
+      eapply bind_step; [apply get_model_ok|]. cbv beta.
+      destruct (prctl_vma_name_ready_b i m).
+      * apply alt_l. apply pure_ok.
+      * apply unmodeled_intro.
+    + apply unmodeled_intro.
 Qed.
