@@ -3778,13 +3778,9 @@ Definition with_statpin (p : Fs.path) (bs : list byte) (m : Model) : Model :=
                          ((p, bs) :: m_statpins m) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
-(** Seed the soft descriptor limit.  Its only caller is [init_model], for
-    the reason [with_net] gives: the limit is an INPUT of the run, so the
-    one place that may install one is the one that turns a [ProcInput]
-    into a model.  Unlike [with_net], which [with_accepted] later
-    advances past, there is no second writer of any kind — see
-    [limst_nofile] for why there can be none — which is also the
-    difference between this and [with_rlimit_core]. *)
+(** Seed the inherited soft descriptor limit.  [init_model] is the only
+    caller of [with_nofile]; a modeled [prlimit64] set may later change
+    the current limit through [with_nofile_pair]. *)
 (** Seed the task's abort-path declaration.  Its only caller is
     [init_model], for the reason [with_net] and [with_nofile] give: the
     declaration is a parameter of the RUN, so the one place that may
@@ -5239,18 +5235,14 @@ Qed.
     CONSTANT over a modeled run, which is why [Creds] can hold it and
     nothing has to write it back.
 
-    [in_nofile] is an input for the same reason, and CONSTANT for a
-    reason worth stating precisely, because an exec really can change
-    this limit: the LSM [bprm_committing_creds] hooks clamp every
+    [in_nofile] is an input for the same reason.  Exec can change the
+    inherited limit: the LSM [bprm_committing_creds] hooks clamp every
     resource including NOFILE (security/selinux/hooks.c,
     [selinux_bprm_committing_creds]; security/apparmor/resource.c; Linux
-    v6.18.46, commit 1f99e9ab748f).  What makes the field constant is
-    not that nothing writes it but WHEN the writers run — at exec, at
-    boot, on a core dump — and this model begins AT execve and reaches
-    none of them afterwards.  So the limit a run starts with is the one
-    it ends with, and where it came from is the environment's business.
-    [limst_nofile] carries the rest of the argument, over the syscalls
-    this model does admit.  Unlike [in_groups] it DOES carry a [Run.valid_input]
+    v6.18.46, commit 1f99e9ab748f).  This model starts after that
+    clamp.  [limst_nofile] tracks the current soft limit, which a
+    modeled [prlimit64] set may raise after the first NOFILE read.
+    Unlike [in_groups], [in_nofile] DOES carry a [Run.valid_input]
     clause, and the difference is which end bounds it: an over-long group
     list is refused where it is read, while the descriptor limit is
     ANSWERED from, so an unreachable value would be answered rather than

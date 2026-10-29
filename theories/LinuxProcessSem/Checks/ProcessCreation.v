@@ -507,23 +507,21 @@ Proof. intros i m Hno. declined_at Hno. Qed.
     arguments rest on each of them having no arm, and the two
     arguments are different ones.
 
-    164 WRITES.  [State.limst_nofile] holds ONE soft RLIMIT_NOFILE for a
-    whole run and [Fs.File.dup3_spec] compares [newfd] against it, which
-    are both claims that nothing modeled can change the limit.  Three
-    system calls reach [do_prlimit] with a [new_rlim] (kernel/sys.c,
+    164 WRITES.  [State.limst_nofile] holds the current soft
+    RLIMIT_NOFILE and [Fs.File.dup3_spec] compares [newfd] against it.
+    The modeled [prlimit64] set can raise this value; the lemma below
+    concerns the separate [setrlimit] syscall.  Three system calls
+    reach [do_prlimit] with a [new_rlim] (kernel/sys.c,
     Linux v6.18.46, commit 1f99e9ab748f): 164, its compat twin, and
-    [prlimit64] (261).  261 IS inside [Specs.modeled_sysnos], and is
-    closed by an arm rather than by this register —
-    [Kernel.Sys.prlimit64_spec] declines every resource but RLIMIT_CORE
-    — which is why only 164 needs an entry here.  Everything else that
-    writes [signal->rlim] runs at exec, at boot or on a core dump, and
-    is out of reach for the same reason 221 is; [Run.valid_nofile]
-    enumerates those.
+    [prlimit64] (261).  261 IS inside [Specs.modeled_sysnos], and has
+    its own scoped arm — which is why only 164 needs an entry here.
+    Everything else that writes [signal->rlim] runs at exec, at boot
+    or on a core dump, and is out of reach for the same reason 221 is;
+    [Run.valid_nofile] enumerates those.
 
     163 READS, and passes [NULL] for [new_rlim] (kernel/sys.c,
-    [SYSCALL_DEFINE2(getrlimit)]), so it changes nothing.  Its decline
-    is load-bearing on the other side: no modeled syscall reads the
-    limit back.
+    [SYSCALL_DEFINE2(getrlimit)]), so it changes nothing.  Its direct
+    syscall remains unmodeled; the [prlimit64] read has its own arm.
 
     Neither is modeled, and neither is merely undone work: they enter
     [do_prlimit] DIRECTLY, skipping [check_prlimit_permission] and the
