@@ -111,7 +111,7 @@ Definition rlim64_zero : list byte := repeat (Z_to_bv 8 0) 16.
 Lemma rlim64_zero_wf : rlim64_wf rlim64_zero = true.
 Proof. reflexivity. Qed.
 
-Definition prlimit64_witness (pid resource new_rlim old_rlim : word)
+Definition prlimit64_core_witness (pid resource new_rlim old_rlim : word)
     (i : SyscallInput) (m : Model) : outcome SyscallEffect :=
   if negb (w_is0 pid) then Unmodeled
   else if negb (Z.eqb (bv_unsigned resource) RLIMIT_CORE) then Unmodeled
@@ -149,12 +149,12 @@ Definition prlimit64_witness (pid resource new_rlim old_rlim : word)
         end
     end.
 
-Lemma prlimit64_witness_ok : forall pid resource new_rlim old_rlim i m,
-  prlimit64_spec pid resource new_rlim old_rlim i m
-    (prlimit64_witness pid resource new_rlim old_rlim i m).
+Lemma prlimit64_core_witness_ok : forall pid resource new_rlim old_rlim i m,
+  prlimit64_core_spec pid resource new_rlim old_rlim i m
+    (prlimit64_core_witness pid resource new_rlim old_rlim i m).
 Proof.
   intros pid resource new_rlim old_rlim i m.
-  unfold prlimit64_spec, prlimit64_witness.
+  unfold prlimit64_core_spec, prlimit64_core_witness.
   destruct (negb (w_is0 pid)); [apply unmodeled_intro|].
   destruct (negb (Z.eqb (bv_unsigned resource) RLIMIT_CORE));
     [apply unmodeled_intro|].
@@ -180,6 +180,141 @@ Proof.
       eapply bind_step; [apply modify_ok|]. apply pure_ok.
     + destruct (negb (access_okb new_rlim 16));
         [apply pure_ok|apply unmodeled_intro].
+Qed.
+
+Definition rlim64_stack_default : list byte :=
+  let soft := word_le8 (Z_to_bv 64 stack_max_size) in soft ++ soft.
+
+Lemma rlim64_stack_default_wf : rlim64_stack_wf rlim64_stack_default = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Definition prlimit64_stack_witness (pid new_rlim old_rlim : word)
+    (i : SyscallInput) (m : Model) : outcome SyscallEffect :=
+  if negb (w_is0 pid) then Unmodeled
+  else if negb (w_is0 new_rlim) then Unmodeled
+  else if w_is0 old_rlim then Unmodeled
+  else
+    match read_bytes_map (in_wmem i) old_rlim (Z_to_bv 64 16) with
+    | None =>
+        if negb (access_okb old_rlim 16)
+        then ret_outcome (errno_ret EFAULT) m else Unmodeled
+    | Some _ =>
+        match m_rlimit_stack m with
+        | Some bs => Ok (mkEffect (Z_to_bv 64 0) [(old_rlim, bs)] []) m []
+        | None =>
+            Ok (mkEffect (Z_to_bv 64 0) [(old_rlim, rlim64_stack_default)] [])
+               (with_rlimit_stack rlim64_stack_default m) []
+        end
+    end.
+
+Lemma prlimit64_stack_witness_ok : forall pid new_rlim old_rlim i m,
+  prlimit64_stack_spec pid new_rlim old_rlim i m
+    (prlimit64_stack_witness pid new_rlim old_rlim i m).
+Proof.
+  intros pid new_rlim old_rlim i m.
+  unfold prlimit64_stack_spec, prlimit64_stack_witness.
+  destruct (negb (w_is0 pid)); [apply unmodeled_intro|].
+  destruct (negb (w_is0 new_rlim)); [apply unmodeled_intro|].
+  destruct (w_is0 old_rlim); [apply unmodeled_intro|].
+  eapply bind_step; [apply input_ok|]. cbv beta.
+  eapply bind_step; [apply get_model_ok|]. cbv beta.
+  destruct (read_bytes_map (in_wmem i) old_rlim (Z_to_bv 64 16)) as [bs1|].
+  - destruct (m_rlimit_stack m) as [bs|]; [apply pure_ok|].
+    eapply bind_step;
+      [apply (choose_ok _ rlim64_stack_default); exact rlim64_stack_default_wf|].
+    eapply bind_step; [apply modify_ok|]. apply pure_ok.
+  - destruct (negb (access_okb old_rlim 16));
+      [apply pure_ok|apply unmodeled_intro].
+Qed.
+
+Definition rlim64_nofile_default (m : Model) : list byte :=
+  word_le8 (m_nofile m) ++ word_le8 (Z_to_bv 64 (2 ^ 31 - 64)).
+
+Lemma rlim64_nofile_default_wf : forall m,
+  rlim64_nofile_ready_b m = true ->
+  rlim64_nofile_wf (rlim64_nofile_default m) m = true.
+Proof.
+  intros m Hready.
+  unfold rlim64_nofile_ready_b in Hready.
+  apply andb_true_iff in Hready as [_ Hhi].
+  assert (Hhard : forall w,
+    rlim64_hard (word_le8 w ++ word_le8 (Z_to_bv 64 (2 ^ 31 - 64))) =
+      Z_to_bv 64 (2 ^ 31 - 64)).
+  { intro w. vm_compute. reflexivity. }
+  unfold rlim64_nofile_wf, rlim64_nofile_default.
+  rewrite Hhard.
+  cbn [word_le8 app length firstn Nat.eqb].
+  rewrite stat_bytes_eqb_refl.
+  replace (bv_unsigned (Z_to_bv 64 (2 ^ 31 - 64)))
+    with (2 ^ 31 - 64)%Z by (vm_compute; reflexivity).
+  rewrite Z.leb_refl.
+  cbn [andb].
+  rewrite andb_true_r.
+  exact Hhi.
+Qed.
+
+Definition prlimit64_nofile_witness (pid new_rlim old_rlim : word)
+    (i : SyscallInput) (m : Model) : outcome SyscallEffect :=
+  if negb (w_is0 pid) then Unmodeled
+  else if negb (w_is0 new_rlim) then Unmodeled
+  else if w_is0 old_rlim then Unmodeled
+  else if negb (rlim64_nofile_ready_b m) then Unmodeled
+  else
+    match read_bytes_map (in_wmem i) old_rlim (Z_to_bv 64 16) with
+    | None =>
+        if negb (access_okb old_rlim 16)
+        then ret_outcome (errno_ret EFAULT) m else Unmodeled
+    | Some _ =>
+        match m_rlimit_nofile m with
+        | Some bs => Ok (mkEffect (Z_to_bv 64 0) [(old_rlim, bs)] []) m []
+        | None =>
+            Ok (mkEffect (Z_to_bv 64 0)
+                 [(old_rlim, rlim64_nofile_default m)] [])
+               (with_rlimit_nofile (rlim64_nofile_default m) m) []
+        end
+    end.
+
+Lemma prlimit64_nofile_witness_ok : forall pid new_rlim old_rlim i m,
+  prlimit64_nofile_spec pid new_rlim old_rlim i m
+    (prlimit64_nofile_witness pid new_rlim old_rlim i m).
+Proof.
+  intros pid new_rlim old_rlim i m.
+  unfold prlimit64_nofile_spec, prlimit64_nofile_witness.
+  destruct (negb (w_is0 pid)); [apply unmodeled_intro|].
+  destruct (negb (w_is0 new_rlim)); [apply unmodeled_intro|].
+  destruct (w_is0 old_rlim); [apply unmodeled_intro|].
+  eapply bind_step; [apply input_ok|]. cbv beta.
+  eapply bind_step; [apply get_model_ok|]. cbv beta.
+  destruct (negb (rlim64_nofile_ready_b m)) eqn:Hr;
+    [apply unmodeled_intro|].
+  destruct (read_bytes_map (in_wmem i) old_rlim (Z_to_bv 64 16)) as [bs1|].
+  - destruct (m_rlimit_nofile m) as [bs|]; [apply pure_ok|].
+    eapply bind_step;
+      [apply (choose_ok _ (rlim64_nofile_default m));
+       apply rlim64_nofile_default_wf;
+       now apply Bool.negb_false_iff in Hr|].
+    eapply bind_step; [apply modify_ok|]. apply pure_ok.
+  - destruct (negb (access_okb old_rlim 16));
+      [apply pure_ok|apply unmodeled_intro].
+Qed.
+
+Definition prlimit64_witness (pid resource new_rlim old_rlim : word)
+    (i : SyscallInput) (m : Model) : outcome SyscallEffect :=
+  if Z.eqb (bv_unsigned resource) RLIMIT_STACK
+  then prlimit64_stack_witness pid new_rlim old_rlim i m
+  else if Z.eqb (bv_unsigned resource) RLIMIT_NOFILE
+  then prlimit64_nofile_witness pid new_rlim old_rlim i m
+  else prlimit64_core_witness pid resource new_rlim old_rlim i m.
+
+Lemma prlimit64_witness_ok : forall pid resource new_rlim old_rlim i m,
+  prlimit64_spec pid resource new_rlim old_rlim i m
+    (prlimit64_witness pid resource new_rlim old_rlim i m).
+Proof.
+  intros. unfold prlimit64_spec, prlimit64_witness.
+  destruct (Z.eqb (bv_unsigned resource) RLIMIT_STACK);
+    [apply prlimit64_stack_witness_ok|].
+  destruct (Z.eqb (bv_unsigned resource) RLIMIT_NOFILE);
+    [apply prlimit64_nofile_witness_ok|apply prlimit64_core_witness_ok].
 Qed.
 
 (* =========================================================================

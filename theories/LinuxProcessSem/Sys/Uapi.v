@@ -501,6 +501,8 @@ Definition O_NOATIME  : Z := 262144%Z.   (* 01000000 *)
 (** [RLIMIT_CORE], the maximum size of a core dump (Linux v6.10-v6.15,
     include/uapi/asm-generic/resource.h, byte-identical at all six tags). *)
 Definition RLIMIT_CORE : Z := 4%Z.
+Definition RLIMIT_STACK : Z := 3%Z.
+Definition RLIMIT_NOFILE : Z := 7%Z.
 
 (** The POSIX clock ids the model interprets
     (include/uapi/linux/time.h, Linux v6.10-v6.15 and v6.18.46; the id

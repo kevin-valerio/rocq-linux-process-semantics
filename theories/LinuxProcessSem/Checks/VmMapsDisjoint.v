@@ -1828,7 +1828,9 @@ Lemma check_prlimit64_frame :
   m_vmmaps m' = m_vmmaps m.
 Proof.
   intros i pid resource new_rlim old_rlim eff m m' evs H.
-  unfold check_prlimit64, check_rlim64_read in H. vm_frame2 H.
+  unfold check_prlimit64, check_prlimit64_core, check_prlimit64_stack,
+    check_prlimit64_nofile, check_rlim64_read,
+    check_rlim64_stack_read, check_rlim64_nofile_read in H. vm_frame2 H.
 Qed.
 
 Lemma check_ftruncate_frame : forall fd len eff m m' evs,

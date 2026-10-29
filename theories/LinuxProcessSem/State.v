@@ -3417,9 +3417,11 @@ Record LimState := mkLimState {
        never re-encodes one; storing [(soft, hard)] would oblige the spec and
        the checker to agree on a round trip neither otherwise needs.
 
-       [prlimit64] ANSWERS ONLY RLIMIT_CORE, and that is a separate matter
-       from which limits this record carries: [limst_nofile] below is a
-       limit the model KNOWS and [prlimit64] still declines. *);
+       [prlimit64] also reads RLIMIT_STACK and RLIMIT_NOFILE in their
+       scoped arms. *);
+  limst_stack : option (list byte)
+    (* The inherited hard limit is pinned on the first modeled stack
+       read.  The soft limit is the fixed 8 MiB stack size. *);
   limst_nofile : word
     (* RLIMIT_NOFILE's SOFT limit, [rlim_cur], as an [unsigned long] -- the
        width [rlimit()] returns (include/linux/sched/signal.h,
@@ -3431,18 +3433,14 @@ Record LimState := mkLimState {
        has to be an input for the same reason the launching uid is one --
        the limits a process starts with are its parent's, so the model does
        not know them and quantifies over them instead.  It never changes
-       because no syscall in [Specs.modeled_sysnos] writes one: [setrlimit]
-       (164) has no dispatcher arm, and [prlimit64] (261) has one but
-       answers only RLIMIT_CORE.  An arm that answered a NOFILE set would
-       have to make this field mutable, and [Sys.Fs.File.dup3_spec] is
-       where the cost of that would land.
-
-       ONLY THE SOFT LIMIT.  [rlim_max] is not carried because nothing
-       reads it: [ksys_dup3] tests [rlimit(RLIMIT_NOFILE)], which is
-       [rlim_cur], and the one syscall that would report the pair
-       ([prlimit64]) declines this resource.  That decline is therefore
-       load-bearing in both directions -- it is why the hard limit may be
-       absent, and answering it would need the field. *)
+       because no modeled syscall writes it: [setrlimit] has no
+       dispatcher arm and NOFILE sets through [prlimit64] are declined.
+       [ksys_dup3] tests this soft limit.  The inherited hard limit is
+       recorded separately on the first modeled NOFILE read. *);
+  limst_nofile_pair : option (list byte)
+    (* The full pair copied out by a modeled RLIMIT_NOFILE read.  Its soft
+       bytes agree with [limst_nofile]; its hard bytes are inherited and
+       pinned on first observation. *)
 }.
 
 (** The clocks the process can read. *)
@@ -3542,7 +3540,10 @@ Definition m_utsname (m : Model) : option (list byte) :=
 Definition m_statpins (m : Model) : list (Fs.path * list byte) :=
   procst_statpins (m_proc m).
 Definition m_rlimit_core (m : Model) : option (list byte) := limst_core (m_lim m).
+Definition m_rlimit_stack (m : Model) : option (list byte) := limst_stack (m_lim m).
 Definition m_nofile (m : Model) : word := limst_nofile (m_lim m).
+Definition m_rlimit_nofile (m : Model) : option (list byte) :=
+  limst_nofile_pair (m_lim m).
 Definition m_clock (m : Model) : word := timest_clock (m_time m).
 Definition m_creds (m : Model) : Creds := procst_creds (m_proc m).
 
@@ -3589,7 +3590,7 @@ Definition mkModel (fds : list (word * FdEntry)) (vm : VmMaps)
                (mkCreds overflow_id overflow_id overflow_id
                         overflow_id overflow_id overflow_id [])
                false (Z_to_bv 64 0) false None false false false false [] None)
-            (mkLimState rlim default_nofile)
+            (mkLimState rlim None default_nofile None)
             (mkTimeState (Z_to_bv 64 0)).
 
 (** Field-update helpers.  Each one rebuilds only its own subsystem and
@@ -3705,7 +3706,16 @@ Definition with_affinity_size (n : nat) (m : Model) : Model :=
             (m_lim m) (m_time m).
 Definition with_rlimit_core (bs : list byte) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
-            (mkLimState (Some bs) (m_nofile m)) (m_time m).
+            (mkLimState (Some bs) (m_rlimit_stack m) (m_nofile m)
+                        (m_rlimit_nofile m)) (m_time m).
+Definition with_rlimit_stack (bs : list byte) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
+            (mkLimState (m_rlimit_core m) (Some bs) (m_nofile m)
+                        (m_rlimit_nofile m)) (m_time m).
+Definition with_rlimit_nofile (bs : list byte) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
+            (mkLimState (m_rlimit_core m) (m_rlimit_stack m) (m_nofile m)
+                        (Some bs)) (m_time m).
 (** Record the UTS name the environment revealed.
     [Kernel.Sys.uname_spec] is the only caller and it calls this only
     on the branch where [m_utsname] was [None], so the pin is written
@@ -3790,7 +3800,7 @@ Definition with_abort_terminal (b : bool) (m : Model) : Model :=
 
 Definition with_nofile (n : word) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
-            (mkLimState (m_rlimit_core m) n) (m_time m).
+            (mkLimState (m_rlimit_core m) (m_rlimit_stack m) n None) (m_time m).
 Definition with_creds (c : Creds) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
             (mkProcState (m_halted m) (m_tid m) c

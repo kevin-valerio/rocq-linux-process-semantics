@@ -268,6 +268,66 @@ Example uname_wrapping_destination_rejects_the_copy :
   = CheckReject.
 Proof. vm_compute. reflexivity. Qed.
 
+Definition rlim_stack_bytes : list byte :=
+  word_le8 (Z_to_bv 64 stack_max_size) ++
+  word_le8 (Z_to_bv 64 (two_pow_64 - 1)).
+
+Example prlimit64_stack_first_read_pins :
+  check_syscall (mkInput 261 [0; 3; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_stack_bytes)] []) rlim_model
+  = CheckOk (with_rlimit_stack rlim_stack_bytes rlim_model) [].
+Proof. check_eq. Qed.
+
+Example prlimit64_stack_wrong_soft_rejected :
+  check_syscall (mkInput 261 [0; 3; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 3 7)] []) rlim_model
+  = CheckReject.
+Proof. check_eq. Qed.
+
+Example prlimit64_stack_repeated_read :
+  check_syscall (mkInput 261 [0; 3; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_stack_bytes)] [])
+    (with_rlimit_stack rlim_stack_bytes rlim_model)
+  = CheckOk (with_rlimit_stack rlim_stack_bytes rlim_model) [].
+Proof. check_eq. Qed.
+
+Example prlimit64_stack_set_unmodeled :
+  check_syscall (mkInput 261 [0; 3; 8192; 0; 0; 0]
+                   (rlim_src_at 0 7) (fun _ => None))
+    (mkEffect 0 [] []) rlim_model = CheckUnmodeled.
+Proof. check_eq. Qed.
+
+Definition rlim_nofile_model : Model :=
+  with_nofile (Z_to_bv 64 1048576) rlim_model.
+
+Definition rlim_nofile_bytes : list byte :=
+  word_le8 (Z_to_bv 64 1048576) ++ word_le8 (Z_to_bv 64 1048576).
+
+Example prlimit64_nofile_first_read_pins :
+  check_syscall (mkInput 261 [0; 7; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_nofile_bytes)] []) rlim_nofile_model
+  = CheckOk (with_rlimit_nofile rlim_nofile_bytes rlim_nofile_model) [].
+Proof. check_eq. Qed.
+
+Example prlimit64_nofile_soft_mismatch_rejected :
+  check_syscall (mkInput 261 [0; 7; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 3 7)] []) rlim_nofile_model
+  = CheckReject.
+Proof. check_eq. Qed.
+
+Example prlimit64_nofile_low_limit_unmodeled :
+  check_syscall (mkInput 261 [0; 7; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 3 7)] []) rlim_model
+  = CheckUnmodeled.
+Proof. check_eq. Qed.
+
+Example prlimit64_nofile_repeated_read :
+  check_syscall (mkInput 261 [0; 7; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_nofile_bytes)] [])
+    (with_rlimit_nofile rlim_nofile_bytes rlim_nofile_model)
+  = CheckOk (with_rlimit_nofile rlim_nofile_bytes rlim_nofile_model) [].
+Proof. check_eq. Qed.
+
 Example prlimit64_first_read_pins :
   check_syscall (mkInput 261 [0; 4; 0; 4096; 0; 0] (fun _ => None) rlim_out)
     (mkEffect 0 [(4096, rlim_bytes 3 7)] []) rlim_model
