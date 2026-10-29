@@ -653,6 +653,20 @@ Lemma check_syscall_wait4 : forall i eff m,
   check_syscall i eff m = check_wait4 i (pid32 (in_arg i 0)) (in_arg i 1) (waitopts32 (in_arg i 2)) (in_arg i 3) eff m.
 Proof. intros i eff m H. unfold check_syscall. rewrite H. reflexivity. Qed.
 
+Lemma check_syscall_riscv_hwprobe : forall i eff m,
+  bv_unsigned (in_sysno i) = 258%Z ->
+  check_syscall i eff m =
+    check_riscv_hwprobe i (in_arg i 0) (in_arg i 1) (in_arg i 2)
+      (in_arg i 3) (flag32 (in_arg i 4)) eff m.
+Proof. intros i eff m H. unfold check_syscall. rewrite H. reflexivity. Qed.
+
+Lemma syscall_witness_riscv_hwprobe : forall i m,
+  bv_unsigned (in_sysno i) = 258%Z ->
+  syscall_spec_witness i m =
+    riscv_hwprobe_witness i (in_arg i 0) (in_arg i 1) (in_arg i 2)
+      (in_arg i 3) (flag32 (in_arg i 4)) m.
+Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
+
 Lemma syscall_witness_wait4 : forall i m,
   bv_unsigned (in_sysno i) = 260%Z ->
   syscall_spec_witness i m = wait4_witness (pid32 (in_arg i 0)) (in_arg i 1) (waitopts32 (in_arg i 2)) (in_arg i 3) i m.
@@ -767,6 +781,7 @@ Ltac arm_dispatch :=
         | erewrite check_syscall_recvfrom by eassumption
         | erewrite check_syscall_recvmsg by eassumption
         | erewrite check_syscall_accept4 by eassumption
+        | erewrite check_syscall_riscv_hwprobe by eassumption
         | erewrite check_syscall_brk by eassumption
         | erewrite check_syscall_munmap by eassumption
         | erewrite check_syscall_mremap by eassumption

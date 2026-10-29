@@ -1058,6 +1058,7 @@ Proof.
     | erewrite check_fcntl_frame by eassumption; exact Hna
     | erewrite check_sched_setscheduler_frame by eassumption; exact Hna
     | erewrite check_sched_getaffinity_frame by eassumption; exact Hna
+    | erewrite check_riscv_hwprobe_frame by eassumption; exact Hna
     | erewrite check_sched_yield_frame by eassumption; exact Hna
     | erewrite check_sigaltstack_frame by eassumption; exact Hna
     | erewrite check_rt_sigaction_frame by eassumption; exact Hna

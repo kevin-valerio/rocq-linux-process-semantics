@@ -31,6 +31,7 @@ From LinuxProcessSemantics.LinuxProcessSem.Checks.Sys Require Import
   Kernel.Signal Kernel.Sys Kernel.Time.Hrtimer Kernel.Time.PosixTimers
   Kernel.Time.Time
   Net.Socket
+  Arch.Riscv.Hwprobe
   Drivers.Char.Random.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Witness Require Import
   Prelude Uaccess Fs.DPath Fs.File Fs.ReadWrite Fs.Open Fs.Sync Fs.Stat Fs.Select
@@ -40,6 +41,7 @@ From LinuxProcessSemantics.LinuxProcessSem.Checks.Witness Require Import
   Kernel.Sched.Syscalls Kernel.Signal Kernel.Sys
   Kernel.Time.Hrtimer Kernel.Time.PosixTimers Kernel.Time.Time
   Net.Socket
+  Arch.Riscv.Hwprobe
   Drivers.Char.Random.
 Import ListNotations.
 Open Scope bv_scope.
@@ -1052,6 +1054,17 @@ Proof.
     eauto using check_accept4_sound_ok, check_accept4_sound_unmodeled, check_accept4_complete_ok, check_accept4_complete_unmodeled, accept4_witness_ok.
 Defined.
 
+(** riscv_hwprobe (258). *)
+Definition arm_riscv_hwprobe : CheckedArm.
+Proof.
+  refine (mkCheckedArm (mkSpecArm 258%Z (fun i => riscv_hwprobe_spec (in_arg i 0) (in_arg i 1) (in_arg i 2) (in_arg i 3) (flag32 (in_arg i 4)) i))
+                       (fun i eff m => check_riscv_hwprobe i (in_arg i 0) (in_arg i 1) (in_arg i 2) (in_arg i 3) (flag32 (in_arg i 4)) eff m)
+                       (fun i m => riscv_hwprobe_witness i (in_arg i 0) (in_arg i 1) (in_arg i 2) (in_arg i 3) (flag32 (in_arg i 4)) m)
+                       _ _ _ _ _);
+    cbn [sa_spec sa_no]; intros;
+    eauto using check_riscv_hwprobe_sound_ok, check_riscv_hwprobe_sound_unmodeled, check_riscv_hwprobe_complete_ok, check_riscv_hwprobe_complete_unmodeled, riscv_hwprobe_witness_ok.
+Defined.
+
 (** wait4 (260). *)
 Definition arm_wait4 : CheckedArm.
 Proof.
@@ -1206,6 +1219,7 @@ Definition checked_table : list CheckedArm :=
   arm_mprotect ::
   arm_madvise ::
   arm_accept4 ::
+  arm_riscv_hwprobe ::
   arm_wait4 ::
   arm_prlimit64 ::
   arm_getrandom ::
@@ -2096,6 +2110,22 @@ Proof. reflexivity. Qed.
 Lemma ca_check_arm_accept4 : forall i eff m,
   ca_check arm_accept4 i eff m = check_accept4 (fd32 (in_arg i 0)) (in_arg i 1) (in_arg i 2) (in_arg i 3) eff m.
 Proof. reflexivity. Qed.
+
+Lemma ca_check_arm_riscv_hwprobe : forall i eff m,
+  ca_check arm_riscv_hwprobe i eff m =
+    check_riscv_hwprobe i (in_arg i 0) (in_arg i 1) (in_arg i 2)
+      (in_arg i 3) (flag32 (in_arg i 4)) eff m.
+Proof. reflexivity. Qed.
+Lemma ca_witness_arm_riscv_hwprobe : forall i m,
+  ca_witness arm_riscv_hwprobe i m =
+    riscv_hwprobe_witness i (in_arg i 0) (in_arg i 1) (in_arg i 2)
+      (in_arg i 3) (flag32 (in_arg i 4)) m.
+Proof. reflexivity. Qed.
+Lemma sa_spec_arm_riscv_hwprobe : forall i m o,
+  sa_spec (ca_arm arm_riscv_hwprobe) i m o =
+    riscv_hwprobe_spec (in_arg i 0) (in_arg i 1) (in_arg i 2)
+      (in_arg i 3) (flag32 (in_arg i 4)) i m o.
+Proof. reflexivity. Qed.
 Lemma ca_witness_arm_accept4 : forall i m,
   ca_witness arm_accept4 i m = accept4_witness (fd32 (in_arg i 0)) (in_arg i 1) (in_arg i 3) m.
 Proof. reflexivity. Qed.
@@ -2240,6 +2270,7 @@ Proof. reflexivity. Qed.
 #[export] Hint Rewrite ca_check_arm_madvise ca_witness_arm_madvise sa_spec_arm_madvise : arm_unfold.
 #[export] Hint Rewrite ca_check_arm_recvmsg ca_witness_arm_recvmsg sa_spec_arm_recvmsg : arm_unfold.
 #[export] Hint Rewrite ca_check_arm_accept4 ca_witness_arm_accept4 sa_spec_arm_accept4 : arm_unfold.
+#[export] Hint Rewrite ca_check_arm_riscv_hwprobe ca_witness_arm_riscv_hwprobe sa_spec_arm_riscv_hwprobe : arm_unfold.
 #[export] Hint Rewrite ca_check_arm_wait4 ca_witness_arm_wait4 sa_spec_arm_wait4 : arm_unfold.
 #[export] Hint Rewrite ca_check_arm_prlimit64 ca_witness_arm_prlimit64 sa_spec_arm_prlimit64 : arm_unfold.
 #[export] Hint Rewrite ca_check_arm_getrandom ca_witness_arm_getrandom sa_spec_arm_getrandom : arm_unfold.
@@ -2562,6 +2593,9 @@ Proof. reflexivity. Qed.
 Lemma ca_no_arm_accept4 : ca_no arm_accept4 = 242%Z.
 Proof. reflexivity. Qed.
 #[export] Hint Rewrite ca_no_arm_accept4 : arm_unfold.
+Lemma ca_no_arm_riscv_hwprobe : ca_no arm_riscv_hwprobe = 258%Z.
+Proof. reflexivity. Qed.
+#[export] Hint Rewrite ca_no_arm_riscv_hwprobe : arm_unfold.
 Lemma ca_no_arm_wait4 : ca_no arm_wait4 = 260%Z.
 Proof. reflexivity. Qed.
 #[export] Hint Rewrite ca_no_arm_wait4 : arm_unfold.

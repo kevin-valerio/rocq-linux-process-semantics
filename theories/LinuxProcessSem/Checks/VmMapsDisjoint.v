@@ -2203,6 +2203,16 @@ Proof.
   all: unfold affinity_after_success; destruct (m_affinity_size m); reflexivity.
 Qed.
 
+Lemma check_riscv_hwprobe_frame :
+  forall i pairs count cpusetsize cpus flags eff m m' evs,
+  check_riscv_hwprobe i pairs count cpusetsize cpus flags eff m =
+    CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
+Proof.
+  intros i pairs count cpusetsize cpus flags eff m m' evs H.
+  unfold check_riscv_hwprobe, check_hwprobe_response in H.
+  vm_frame2 H.
+Qed.
+
 (** sched_yield answers 0 and hands back the model it was given, so the
     mappings are the same list. *)
 Lemma check_sched_yield_frame : forall eff m m' evs,
@@ -2502,6 +2512,7 @@ Proof.
     | erewrite check_fcntl_frame by eassumption; exact Hwf
     | erewrite check_sched_setscheduler_frame by eassumption; exact Hwf
     | erewrite check_sched_getaffinity_frame by eassumption; exact Hwf
+    | erewrite check_riscv_hwprobe_frame by eassumption; exact Hwf
     | erewrite check_sched_yield_frame by eassumption; exact Hwf
     | erewrite check_sigaltstack_frame by eassumption; exact Hwf
     | erewrite check_rt_sigaction_frame by eassumption; exact Hwf
