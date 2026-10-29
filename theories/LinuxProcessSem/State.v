@@ -3211,8 +3211,8 @@ Record ProcState := mkProcState {
        which two [uname] calls disagree about which kernel is running,
        which no Linux machine produces -- the same argument
        [Sys.Kernel.Sched.Syscalls.sched_getaffinity_spec] makes for the
-       CPU set it declines to answer for, and the note above [Record
-       Model] is where the three mechanisms are compared.
+       CPU-mask size it records, and the note above [Record Model] is
+       where the three mechanisms are compared.
 
        WHY IT IS PROCESS STATE.  Linux keeps it in the UTS NAMESPACE
        ([current->nsproxy->uts_ns->name], include/linux/utsname.h's
@@ -3393,7 +3393,12 @@ Record ProcState := mkProcState {
        KEYED BY PATH, WHICH IS THIS MODEL'S INODE.  Linux keys it by
        inode, and the difference shows only where two paths name one
        inode or one path names two -- neither of which [Fs]'s flat,
-       link-free namespace can express (Fs.v). *)
+       link-free namespace can express (Fs.v). *);
+  procst_affinity_size : option nat
+    (* [cpumask_size()] in bytes, pinned when sched_getaffinity returns
+       eight bytes for a request longer than eight bytes.  That
+       observation reveals the full size; an equal-size request does
+       not.  The current spec models this size only. *)
 }.
 
 (** The resource limits the process has been observed to have. *)
@@ -3484,11 +3489,9 @@ Record TimeState := mkTimeState {
     ONE record taking opposite answers.  What no field can say, and the
     reason this note exists, is which answer a NEW one should take.
 
-    THE PENDING CASE, named because it is what made this note worth
-    writing: [Sys.Kernel.Sched.Syscalls.sched_getaffinity_spec] declines
-    for want of a CPU set, and wants the SECOND mechanism — its own
-    spec argues why, and is not repeated here.  Naming that is not the
-    same as building it, and it is not built. *)
+    [Sys.Kernel.Sched.Syscalls.sched_getaffinity_spec] uses the second
+    mechanism for the CPU-mask size: a return shorter than the request
+    reveals [cpumask_size()], which later calls must respect. *)
 Record Model := mkModelOf {
   m_fd   : FdState;
   m_vm   : VmState;
@@ -3516,6 +3519,8 @@ Definition m_proc_maps (m : Model) : option (list byte) :=
   fsst_proc_maps (m_fsys m).
 Definition m_halted (m : Model) : option word := procst_halted (m_proc m).
 Definition m_tid (m : Model) : option word := procst_tid (m_proc m).
+Definition m_affinity_size (m : Model) : option nat :=
+  procst_affinity_size (m_proc m).
 Definition m_setsid_succeeded (m : Model) : bool :=
   procst_setsid_succeeded (m_proc m).
 Definition m_has_children (m : Model) : bool := procst_children (m_proc m).
@@ -3583,7 +3588,7 @@ Definition mkModel (fds : list (word * FdEntry)) (vm : VmMaps)
             (mkProcState halted tid
                (mkCreds overflow_id overflow_id overflow_id
                         overflow_id overflow_id overflow_id [])
-               false (Z_to_bv 64 0) false None false false false false [])
+               false (Z_to_bv 64 0) false None false false false false [] None)
             (mkLimState rlim default_nofile)
             (mkTimeState (Z_to_bv 64 0)).
 
@@ -3658,7 +3663,7 @@ Definition with_fs (fs : Fs.Fs) (m : Model) : Model :=
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
                          (m_abort_terminal m)
-                         (statpins_restrict fs (m_statpins m)))
+                         (statpins_restrict fs (m_statpins m)) (m_affinity_size m))
             (m_lim m) (m_time m).
 
 Definition with_proc_maps (data : option (list byte)) (m : Model) : Model :=
@@ -3678,7 +3683,7 @@ Definition with_halted (code : word) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          false (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m))
             (m_lim m) (m_time m).
 Definition with_tid (tid : word) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
@@ -3687,7 +3692,16 @@ Definition with_tid (tid : word) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m))
+            (m_lim m) (m_time m).
+Definition with_affinity_size (n : nat) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
+            (mkProcState (m_halted m) (m_tid m) (m_creds m)
+                         (m_setsid_succeeded m) (m_sigmask m)
+                         (m_has_children m) (m_utsname m)
+                         (m_sigaltstack_installed m)
+                         (procst_killed (m_proc m)) (m_sigabrt_pending m)
+                         (m_abort_terminal m) (m_statpins m) (Some n))
             (m_lim m) (m_time m).
 Definition with_rlimit_core (bs : list byte) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
@@ -3709,7 +3723,7 @@ Definition with_utsname (bs : list byte) (m : Model) : Model :=
                          (m_has_children m) (Some bs)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m))
             (m_lim m) (m_time m).
 (** Look a file's stat pin up by path.  [None] means no [fstat] has
     delivered a [struct stat] for that file yet, which is the branch
@@ -3745,7 +3759,7 @@ Definition with_statpin (p : Fs.path) (bs : list byte) (m : Model) : Model :=
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
                          (m_abort_terminal m)
-                         ((p, bs) :: m_statpins m))
+                         ((p, bs) :: m_statpins m) (m_affinity_size m))
             (m_lim m) (m_time m).
 
 (** Seed the soft descriptor limit.  Its only caller is [init_model], for
@@ -3771,7 +3785,7 @@ Definition with_abort_terminal (b : bool) (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m) b
-                         (m_statpins m))
+                         (m_statpins m) (m_affinity_size m))
             (m_lim m) (m_time m).
 
 Definition with_nofile (n : word) (m : Model) : Model :=
@@ -3784,7 +3798,7 @@ Definition with_creds (c : Creds) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m))
             (m_lim m) (m_time m).
 Definition with_setsid_succeeded (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
@@ -3792,7 +3806,7 @@ Definition with_setsid_succeeded (m : Model) : Model :=
                          true (m_sigmask m) (procst_children (m_proc m))
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m))
             (m_lim m) (m_time m).
 
 (** Record that the process now has something to reap.
@@ -3818,7 +3832,7 @@ Definition with_children (m : Model) : Model :=
                          (m_setsid_succeeded m) (m_sigmask m) true
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m))
             (m_lim m) (m_time m).
 (** Install a new blocked mask.  [Kernel.Signal.rt_sigprocmask_spec] is
     the only caller, and the only kernel path that reaches
@@ -3838,7 +3852,7 @@ Definition with_sigmask (s : word) (m : Model) : Model :=
                          (m_setsid_succeeded m) s (m_has_children m)
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m))
             (m_lim m) (m_time m).
 
 (** Record that a [sigaltstack] has installed an alternate stack.
@@ -3865,7 +3879,7 @@ Definition with_sigaltstack_installed (m : Model) : Model :=
                          (m_setsid_succeeded m) (m_sigmask m)
                          (m_has_children m) (m_utsname m) true
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m))
             (m_lim m) (m_time m).
 
 (** Record that SIGABRT has been sent and is BLOCKED, so it waits in
@@ -3890,7 +3904,7 @@ Definition with_sigabrt_pending (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) true (m_abort_terminal m)
-                         (m_statpins m))
+                         (m_statpins m) (m_affinity_size m))
             (m_lim m) (m_time m).
 
 (** End the process by a fatal signal.  It writes the signal number into
@@ -3920,7 +3934,7 @@ Definition with_killed (sig : word) (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          true (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m))
             (m_lim m) (m_time m).
 
 (** The invariant the two fields are written under, stated where the

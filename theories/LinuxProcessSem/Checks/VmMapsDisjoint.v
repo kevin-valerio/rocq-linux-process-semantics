@@ -2191,12 +2191,12 @@ Proof.
   unfold check_sched_setscheduler in H. vm_frame2 H.
 Qed.
 
-(** sched_getaffinity answers an errno or declines; it never reaches
-    user memory, let alone the mappings. *)
-Lemma check_sched_getaffinity_frame : forall len eff m m' evs,
-  check_sched_getaffinity len eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
+(** sched_getaffinity records the CPU-mask size but preserves mappings. *)
+Lemma check_sched_getaffinity_frame : forall i len eff m m' evs,
+  check_sched_getaffinity i len eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
-  intros len eff m m' evs H. unfold check_sched_getaffinity in H. vm_frame2 H.
+  intros i len eff m m' evs H. unfold check_sched_getaffinity in H. vm_frame2 H.
+  all: unfold affinity_after_success; destruct (m_affinity_size m); reflexivity.
 Qed.
 
 (** sched_yield answers 0 and hands back the model it was given, so the

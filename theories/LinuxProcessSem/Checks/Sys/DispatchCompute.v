@@ -310,12 +310,12 @@ Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_sched_getaffinity : forall i eff m,
   bv_unsigned (in_sysno i) = 123%Z ->
-  check_syscall i eff m = check_sched_getaffinity (in_arg i 1) eff m.
+  check_syscall i eff m = check_sched_getaffinity i (in_arg i 1) eff m.
 Proof. intros i eff m H. unfold check_syscall. rewrite H. reflexivity. Qed.
 
 Lemma syscall_witness_sched_getaffinity : forall i m,
   bv_unsigned (in_sysno i) = 123%Z ->
-  syscall_spec_witness i m = sched_getaffinity_witness (in_arg i 1) m.
+  syscall_spec_witness i m = sched_getaffinity_witness i (in_arg i 1) m.
 Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_sched_yield : forall i eff m,
