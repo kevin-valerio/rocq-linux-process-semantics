@@ -2358,7 +2358,7 @@ Proof. intros. unfold sym_stepB, sym_step. autorewrite with bceq. reflexivity. Q
 Lemma sym_step_know : forall segs i ss scr ss' scs scr',
   sym_step segs i ss scr = SOk ss' scs scr' -> s_know ss' = s_know ss.
 Proof.
-  intros segs i ss scr ss' scs scr' H. unfold sym_step, sym_read in H.
+  intros segs i ss scr ss' scs scr' H. unfold sym_step, sym_step_size, sym_read in H.
   destruct i; try discriminate;
   repeat (lazymatch type of H with
           | SOk _ _ _ = SOk _ _ _ => injection H as <- _ _
