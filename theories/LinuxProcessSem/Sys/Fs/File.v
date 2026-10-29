@@ -238,21 +238,13 @@ Definition dup3_flags_ok (flags : word) : bool :=
     reachable — a parent lowers the limit and execs, and the fds already
     open stay open.
 
-    The limit never moves during a run, which is what lets one field
-    hold it and what makes this gate a test rather than a guess.  Why
-    it cannot move is argued once, on [State.limst_nofile]; what it
-    costs if that stops being true lands here.
-
-    THAT ARGUMENT IS AN ABSENCE, so it is REGISTERED rather than only
-    written down.  It holds while [setrlimit] (164) has no dispatcher
-    arm, and [Checks.ProcessCreation]'s [setrlimit_unmodeled] and
-    [setrlimit_checker_unmodeled] prove that it declines — so
-    modelling 164 breaks those proofs instead of silently invalidating this
-    gate.  [prlimit64] (261) is the writer that
-    DOES have an arm, and no register can speak for it: it is closed by
-    [Sys.prlimit64_spec] declining every resource but RLIMIT_CORE, so
-    widening that arm is a change this file has to be re-read
-    against.
+    [State.m_nofile] holds the current soft limit.  The NOFILE arm of
+    [prlimit64] (261) can raise it after a read pins the inherited pair;
+    [State.with_nofile_pair] updates the soft limit and that pair
+    together.  This gate therefore tests the value after the set.
+    [setrlimit] (164) still has no dispatcher arm, as
+    [Checks.ProcessCreation]'s [setrlimit_unmodeled] and
+    [setrlimit_checker_unmodeled] prove.
 
     WHAT IS STILL DECLINED, AND WHY.  A free [newfd] at or above
     [Uapi.NR_OPEN_DEFAULT] and below the limit.  Linux answers it out of

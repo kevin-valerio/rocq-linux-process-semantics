@@ -169,7 +169,7 @@ Definition check_rlim64_nofile_read (old_rlim : word)
   | _ => CheckReject
   end.
 
-Definition check_prlimit64_nofile (i : SyscallInput)
+Definition check_prlimit64_nofile_read (i : SyscallInput)
     (pid new_rlim old_rlim : word)
     (eff : SyscallEffect) (m : Model) : check_result :=
   if negb (w_is0 pid) then CheckUnmodeled
@@ -184,6 +184,45 @@ Definition check_prlimit64_nofile (i : SyscallInput)
         else CheckUnmodeled
     | Some _ => check_rlim64_nofile_read old_rlim eff m
     end.
+
+Definition check_prlimit64_nofile_set (i : SyscallInput)
+    (pid new_rlim old_rlim : word)
+    (eff : SyscallEffect) (m : Model) : check_result :=
+  if negb (w_is0 pid) then CheckUnmodeled
+  else if w_is0 new_rlim then CheckUnmodeled
+  else if negb (w_is0 old_rlim) then CheckUnmodeled
+  else if negb (rlim64_nofile_ready_b m) then CheckUnmodeled
+  else
+    match m_rlimit_nofile m with
+    | None => CheckUnmodeled
+    | Some bs0 =>
+        match read_bytes_map (in_mem i) new_rlim (Z_to_bv 64 16) with
+        | None =>
+            if negb (access_okb new_rlim 16)
+            then check_ret_only eff (errno_ret EFAULT) m []
+            else CheckUnmodeled
+        | Some nb =>
+            if (bv_unsigned (rlim64_hard nb) <?
+                bv_unsigned (rlim64_soft nb))%Z
+            then check_ret_only_copyins [(new_rlim, 16%nat)]
+                   eff (errno_ret EINVAL) m []
+            else if negb (rlim64_nofile_go_raise_b bs0 nb m)
+                 then CheckUnmodeled
+                 else if bv_eqb (eff_ret eff) (errno_ret EPERM)
+                      then check_ret_only_copyins [(new_rlim, 16%nat)]
+                             eff (errno_ret EPERM) m []
+                      else check_ret_only_copyins [(new_rlim, 16%nat)]
+                             eff (Z_to_bv 64 0)
+                             (with_nofile_pair (rlim64_soft nb) nb m) []
+        end
+    end.
+
+Definition check_prlimit64_nofile (i : SyscallInput)
+    (pid new_rlim old_rlim : word)
+    (eff : SyscallEffect) (m : Model) : check_result :=
+  if w_is0 new_rlim
+  then check_prlimit64_nofile_read i pid new_rlim old_rlim eff m
+  else check_prlimit64_nofile_set i pid new_rlim old_rlim eff m.
 
 Definition check_prlimit64 (i : SyscallInput)
     (pid resource new_rlim old_rlim : word)
@@ -979,13 +1018,13 @@ Proof.
       sys_unfold; inv_ok; hall Ho; hall Hw; hall Ha; inv_ok.
 Qed.
 
-Lemma check_prlimit64_nofile_sound_ok :
+Lemma check_prlimit64_nofile_read_sound_ok :
   forall i pid new_rlim old_rlim eff m m' evs,
-  check_prlimit64_nofile i pid new_rlim old_rlim eff m = CheckOk m' evs ->
-  prlimit64_nofile_spec pid new_rlim old_rlim i m (Ok eff m' evs).
+  check_prlimit64_nofile_read i pid new_rlim old_rlim eff m = CheckOk m' evs ->
+  prlimit64_nofile_read_spec pid new_rlim old_rlim i m (Ok eff m' evs).
 Proof.
   intros i pid new_rlim old_rlim eff m m' evs H.
-  unfold check_prlimit64_nofile in H. unfold prlimit64_nofile_spec.
+  unfold check_prlimit64_nofile_read in H. unfold prlimit64_nofile_read_spec.
   destruct (negb (w_is0 pid)) eqn:Hp; [discriminate|]. cbv iota.
   destruct (negb (w_is0 new_rlim)) eqn:Hn; [discriminate|]. cbv iota.
   destruct (w_is0 old_rlim) eqn:Ho; [discriminate|]. cbv iota.
@@ -1005,13 +1044,13 @@ Proof.
     apply check_ret_only_ok_iff in H as (-> & -> & ->). apply pure_ok.
 Qed.
 
-Lemma check_prlimit64_nofile_sound_unmodeled :
+Lemma check_prlimit64_nofile_read_sound_unmodeled :
   forall i pid new_rlim old_rlim eff m,
-  check_prlimit64_nofile i pid new_rlim old_rlim eff m = CheckUnmodeled ->
-  prlimit64_nofile_spec pid new_rlim old_rlim i m Unmodeled.
+  check_prlimit64_nofile_read i pid new_rlim old_rlim eff m = CheckUnmodeled ->
+  prlimit64_nofile_read_spec pid new_rlim old_rlim i m Unmodeled.
 Proof.
   intros i pid new_rlim old_rlim eff m H.
-  unfold check_prlimit64_nofile in H. unfold prlimit64_nofile_spec.
+  unfold check_prlimit64_nofile_read in H. unfold prlimit64_nofile_read_spec.
   destruct (negb (w_is0 pid)) eqn:Hp.
   { cbv iota. apply unmodeled_intro. }
   cbv iota in H |- *.
@@ -1033,13 +1072,13 @@ Proof.
     + apply unmodeled_intro.
 Qed.
 
-Lemma check_prlimit64_nofile_complete_ok :
+Lemma check_prlimit64_nofile_read_complete_ok :
   forall i pid new_rlim old_rlim eff m m' evs,
-  prlimit64_nofile_spec pid new_rlim old_rlim i m (Ok eff m' evs) ->
-  check_prlimit64_nofile i pid new_rlim old_rlim eff m = CheckOk m' evs.
+  prlimit64_nofile_read_spec pid new_rlim old_rlim i m (Ok eff m' evs) ->
+  check_prlimit64_nofile_read i pid new_rlim old_rlim eff m = CheckOk m' evs.
 Proof.
   intros i pid new_rlim old_rlim eff m m' evs H.
-  unfold prlimit64_nofile_spec in H. unfold check_prlimit64_nofile.
+  unfold prlimit64_nofile_read_spec in H. unfold check_prlimit64_nofile_read.
   destruct (negb (w_is0 pid)) eqn:Hp; [sys_unfold; inv_ok|].
   cbv iota in H |- *.
   destruct (negb (w_is0 new_rlim)) eqn:Hn; [sys_unfold; inv_ok|].
@@ -1064,13 +1103,13 @@ Proof.
     apply check_ret_only_ok_iff. now repeat split.
 Qed.
 
-Lemma check_prlimit64_nofile_complete_unmodeled :
+Lemma check_prlimit64_nofile_read_complete_unmodeled :
   forall i pid new_rlim old_rlim m eff,
-  prlimit64_nofile_spec pid new_rlim old_rlim i m Unmodeled ->
-  check_prlimit64_nofile i pid new_rlim old_rlim eff m = CheckUnmodeled.
+  prlimit64_nofile_read_spec pid new_rlim old_rlim i m Unmodeled ->
+  check_prlimit64_nofile_read i pid new_rlim old_rlim eff m = CheckUnmodeled.
 Proof.
   intros i pid new_rlim old_rlim m eff H.
-  unfold prlimit64_nofile_spec in H. unfold check_prlimit64_nofile.
+  unfold prlimit64_nofile_read_spec in H. unfold check_prlimit64_nofile_read.
   destruct (negb (w_is0 pid)) eqn:Hp; [reflexivity|]. cbv iota in H |- *.
   destruct (negb (w_is0 new_rlim)) eqn:Hn; [reflexivity|].
   cbv iota in H |- *.
@@ -1086,6 +1125,200 @@ Proof.
   - destruct (negb (access_okb old_rlim 16)) eqn:Ha;
       [exfalso|reflexivity];
       sys_unfold; inv_ok; hall Ho; hall Hw; hall Ha; inv_ok.
+Qed.
+
+Lemma check_prlimit64_nofile_set_sound_ok :
+  forall i pid new_rlim old_rlim eff m m' evs,
+  check_prlimit64_nofile_set i pid new_rlim old_rlim eff m = CheckOk m' evs ->
+  prlimit64_nofile_set_spec pid new_rlim old_rlim i m (Ok eff m' evs).
+Proof.
+  intros i pid new_rlim old_rlim eff m m' evs H.
+  unfold check_prlimit64_nofile_set in H.
+  unfold prlimit64_nofile_set_spec.
+  destruct (negb (w_is0 pid)) eqn:Hp; [discriminate|]. cbv iota.
+  destruct (w_is0 new_rlim) eqn:Hn; [discriminate|]. cbv iota.
+  destruct (negb (w_is0 old_rlim)) eqn:Ho; [discriminate|]. cbv iota.
+  eapply bind_ok0; [apply input_ok|]. cbv beta.
+  eapply bind_ok0; [apply get_model_ok|]. cbv beta.
+  destruct (negb (rlim64_nofile_ready_b m)) eqn:Hr;
+    [discriminate|].
+  destruct (m_rlimit_nofile m) as [bs0|] eqn:Hm; [|discriminate].
+  destruct (read_bytes_map (in_mem i) new_rlim (Z_to_bv 64 16)) as [nb|]
+    eqn:Hw.
+  - destruct ((bv_unsigned (rlim64_hard nb) <?
+               bv_unsigned (rlim64_soft nb))%Z) eqn:Hi.
+    + apply check_ret_only_copyins_ok_iff in H as (-> & -> & ->).
+      apply record_copyins_ok. apply pure_ok.
+    + destruct (negb (rlim64_nofile_go_raise_b bs0 nb m)) eqn:Hg;
+        [discriminate|].
+      destruct (bv_eqb (eff_ret eff) (errno_ret EPERM)) eqn:He.
+      * apply check_ret_only_copyins_ok_iff in H as (-> & -> & ->).
+        apply record_copyins_ok. apply alt_l. apply pure_ok.
+      * apply check_ret_only_copyins_ok_iff in H as (-> & -> & ->).
+        apply record_copyins_ok. apply alt_r.
+        eapply bind_ok0; [apply modify_ok|]. apply pure_ok.
+  - destruct (negb (access_okb new_rlim 16)) eqn:Ha;
+      [|discriminate].
+    apply check_ret_only_ok_iff in H as (-> & -> & ->). apply pure_ok.
+Qed.
+
+Lemma check_prlimit64_nofile_set_sound_unmodeled :
+  forall i pid new_rlim old_rlim eff m,
+  check_prlimit64_nofile_set i pid new_rlim old_rlim eff m = CheckUnmodeled ->
+  prlimit64_nofile_set_spec pid new_rlim old_rlim i m Unmodeled.
+Proof.
+  intros i pid new_rlim old_rlim eff m H.
+  unfold check_prlimit64_nofile_set in H.
+  unfold prlimit64_nofile_set_spec.
+  destruct (negb (w_is0 pid)) eqn:Hp.
+  { cbv iota. apply unmodeled_intro. }
+  cbv iota in H |- *.
+  destruct (w_is0 new_rlim) eqn:Hn.
+  { cbv iota. apply unmodeled_intro. }
+  cbv iota in H |- *.
+  destruct (negb (w_is0 old_rlim)) eqn:Ho.
+  { cbv iota. apply unmodeled_intro. }
+  cbv iota in H |- *.
+  eapply bind_unmodeled2; [apply input_ok|].
+  eapply bind_unmodeled2; [apply get_model_ok|].
+  destruct (negb (rlim64_nofile_ready_b m)) eqn:Hr;
+    [apply unmodeled_intro|].
+  destruct (m_rlimit_nofile m) as [bs0|] eqn:Hm;
+    [|apply unmodeled_intro].
+  destruct (read_bytes_map (in_mem i) new_rlim (Z_to_bv 64 16)) as [nb|]
+    eqn:Hw.
+  - destruct ((bv_unsigned (rlim64_hard nb) <?
+               bv_unsigned (rlim64_soft nb))%Z) eqn:Hi.
+    + now apply check_ret_only_copyins_no_unmodeled in H.
+    + destruct (negb (rlim64_nofile_go_raise_b bs0 nb m)) eqn:Hg.
+      * apply record_copyins_unmodeled. apply unmodeled_intro.
+      * destruct (bv_eqb (eff_ret eff) (errno_ret EPERM));
+          now apply check_ret_only_copyins_no_unmodeled in H.
+  - destruct (negb (access_okb new_rlim 16)) eqn:Ha.
+    + now apply check_ret_only_no_unmodeled in H.
+    + apply unmodeled_intro.
+Qed.
+
+Lemma check_prlimit64_nofile_set_complete_ok :
+  forall i pid new_rlim old_rlim eff m m' evs,
+  prlimit64_nofile_set_spec pid new_rlim old_rlim i m (Ok eff m' evs) ->
+  check_prlimit64_nofile_set i pid new_rlim old_rlim eff m = CheckOk m' evs.
+Proof.
+  intros i pid new_rlim old_rlim eff m m' evs H.
+  unfold prlimit64_nofile_set_spec in H.
+  unfold check_prlimit64_nofile_set.
+  destruct (negb (w_is0 pid)) eqn:Hp; [sys_unfold; inv_ok|].
+  cbv iota in H |- *.
+  destruct (w_is0 new_rlim) eqn:Hn; [sys_unfold; inv_ok|].
+  cbv iota in H |- *.
+  destruct (negb (w_is0 old_rlim)) eqn:Ho; [sys_unfold; inv_ok|].
+  cbv iota in H |- *.
+  apply bind_input_model_inv in H.
+  destruct (negb (rlim64_nofile_ready_b m)) eqn:Hr;
+    [inversion H|].
+  cbv iota in H |- *.
+  destruct (m_rlimit_nofile m) as [bs0|] eqn:Hm;
+    [|sys_unfold; inv_ok; hall Hm; inv_ok].
+  destruct (read_bytes_map (in_mem i) new_rlim (Z_to_bv 64 16)) as [nb|]
+    eqn:Hw.
+  - destruct ((bv_unsigned (rlim64_hard nb) <?
+               bv_unsigned (rlim64_soft nb))%Z) eqn:Hi;
+      [ sys_unfold; inv_ok; hall Hm; hall Hw; hall Hi; inv_ok;
+        apply check_ret_only_copyins_ok_iff; now repeat split | ].
+    destruct (negb (rlim64_nofile_go_raise_b bs0 nb m)) eqn:Hg.
+    + exfalso. sys_unfold; inv_ok; hall Hm; hall Hw; hall Hi; hall Hg;
+        inv_ok.
+    + sys_unfold; inv_ok; hall Hm; hall Hw; hall Hi; hall Hg;
+        inv_ok.
+      * cbn [eff_ret]. rewrite bv_eqb_refl.
+        apply check_ret_only_copyins_ok_iff. now repeat split.
+      * cbn [eff_ret].
+        replace (bv_eqb (Z_to_bv 64 0) (errno_ret EPERM)) with false
+          by (vm_compute; reflexivity).
+        apply check_ret_only_copyins_ok_iff. now repeat split.
+  - destruct (negb (access_okb new_rlim 16)) eqn:Ha;
+      sys_unfold; inv_ok; hall Hm; hall Hw; hall Ha; inv_ok.
+    apply check_ret_only_ok_iff. now repeat split.
+Qed.
+
+Lemma check_prlimit64_nofile_set_complete_unmodeled :
+  forall i pid new_rlim old_rlim m eff,
+  prlimit64_nofile_set_spec pid new_rlim old_rlim i m Unmodeled ->
+  check_prlimit64_nofile_set i pid new_rlim old_rlim eff m = CheckUnmodeled.
+Proof.
+  intros i pid new_rlim old_rlim m eff H.
+  unfold prlimit64_nofile_set_spec in H.
+  unfold check_prlimit64_nofile_set.
+  destruct (negb (w_is0 pid)) eqn:Hp; [reflexivity|]. cbv iota in H |- *.
+  destruct (w_is0 new_rlim) eqn:Hn; [reflexivity|]. cbv iota in H |- *.
+  destruct (negb (w_is0 old_rlim)) eqn:Ho; [reflexivity|].
+  cbv iota in H |- *.
+  apply bind_input_model_inv in H.
+  destruct (negb (rlim64_nofile_ready_b m)) eqn:Hr;
+    [reflexivity|].
+  cbv iota in H |- *.
+  destruct (m_rlimit_nofile m) as [bs0|] eqn:Hm; [|reflexivity].
+  destruct (read_bytes_map (in_mem i) new_rlim (Z_to_bv 64 16)) as [nb|]
+    eqn:Hw.
+  - destruct ((bv_unsigned (rlim64_hard nb) <?
+               bv_unsigned (rlim64_soft nb))%Z) eqn:Hi;
+      [ exfalso; sys_unfold; inv_ok; hall Hm; hall Hw; hall Hi;
+        inv_ok | ].
+    destruct (negb (rlim64_nofile_go_raise_b bs0 nb m)) eqn:Hg;
+      [reflexivity|exfalso];
+      sys_unfold; inv_ok; hall Hm; hall Hw; hall Hi; hall Hg;
+      inv_ok.
+  - destruct (negb (access_okb new_rlim 16)) eqn:Ha;
+      [exfalso|reflexivity];
+      sys_unfold; inv_ok; hall Hm; hall Hw; hall Ha; inv_ok.
+Qed.
+
+Lemma check_prlimit64_nofile_sound_ok :
+  forall i pid new_rlim old_rlim eff m m' evs,
+  check_prlimit64_nofile i pid new_rlim old_rlim eff m = CheckOk m' evs ->
+  prlimit64_nofile_spec pid new_rlim old_rlim i m (Ok eff m' evs).
+Proof.
+  intros. unfold check_prlimit64_nofile in H.
+  unfold prlimit64_nofile_spec.
+  destruct (w_is0 new_rlim);
+    [eapply check_prlimit64_nofile_read_sound_ok
+    |eapply check_prlimit64_nofile_set_sound_ok]; eassumption.
+Qed.
+
+Lemma check_prlimit64_nofile_sound_unmodeled :
+  forall i pid new_rlim old_rlim eff m,
+  check_prlimit64_nofile i pid new_rlim old_rlim eff m = CheckUnmodeled ->
+  prlimit64_nofile_spec pid new_rlim old_rlim i m Unmodeled.
+Proof.
+  intros. unfold check_prlimit64_nofile in H.
+  unfold prlimit64_nofile_spec.
+  destruct (w_is0 new_rlim);
+    [eapply check_prlimit64_nofile_read_sound_unmodeled
+    |eapply check_prlimit64_nofile_set_sound_unmodeled]; eassumption.
+Qed.
+
+Lemma check_prlimit64_nofile_complete_ok :
+  forall i pid new_rlim old_rlim eff m m' evs,
+  prlimit64_nofile_spec pid new_rlim old_rlim i m (Ok eff m' evs) ->
+  check_prlimit64_nofile i pid new_rlim old_rlim eff m = CheckOk m' evs.
+Proof.
+  intros. unfold prlimit64_nofile_spec in H.
+  unfold check_prlimit64_nofile.
+  destruct (w_is0 new_rlim);
+    [eapply check_prlimit64_nofile_read_complete_ok
+    |eapply check_prlimit64_nofile_set_complete_ok]; eassumption.
+Qed.
+
+Lemma check_prlimit64_nofile_complete_unmodeled :
+  forall i pid new_rlim old_rlim m eff,
+  prlimit64_nofile_spec pid new_rlim old_rlim i m Unmodeled ->
+  check_prlimit64_nofile i pid new_rlim old_rlim eff m = CheckUnmodeled.
+Proof.
+  intros. unfold prlimit64_nofile_spec in H.
+  unfold check_prlimit64_nofile.
+  destruct (w_is0 new_rlim);
+    [eapply check_prlimit64_nofile_read_complete_unmodeled
+    |eapply check_prlimit64_nofile_set_complete_unmodeled]; eassumption.
 Qed.
 
 Lemma check_prlimit64_sound_ok :

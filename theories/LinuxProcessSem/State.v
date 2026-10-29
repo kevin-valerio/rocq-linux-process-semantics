@@ -3419,18 +3419,18 @@ Record LimState := mkLimState {
 
        AN INPUT OF THE RUN, not an observation: unlike [limst_core], which
        is pinned the first time a prlimit64 reads it, this one is seeded by
-       [init_model] from [ProcInput]'s [in_nofile] and never changes.  It
+       [init_model] from [ProcInput]'s [in_nofile].  It
        has to be an input for the same reason the launching uid is one --
        the limits a process starts with are its parent's, so the model does
-       not know them and quantifies over them instead.  It never changes
-       because no modeled syscall writes it: [setrlimit] has no
-       dispatcher arm and NOFILE sets through [prlimit64] are declined.
-       [ksys_dup3] tests this soft limit.  The inherited hard limit is
-       recorded separately on the first modeled NOFILE read. *);
+       not know them and quantifies over them instead.  A modeled
+       [prlimit64] set may raise this value after the first NOFILE read.
+       [ksys_dup3] tests the current soft limit.  The inherited hard limit
+       is recorded separately on the first modeled NOFILE read. *);
   limst_nofile_pair : option (list byte)
     (* The full pair copied out by a modeled RLIMIT_NOFILE read.  Its soft
        bytes agree with [limst_nofile]; its hard bytes are inherited and
-       pinned on first observation. *)
+       pinned on first observation.  A modeled set replaces both the
+       soft limit and this pair. *)
 }.
 
 (** The clocks the process can read. *)
@@ -3776,6 +3776,10 @@ Definition with_abort_terminal (b : bool) (m : Model) : Model :=
 Definition with_nofile (n : word) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
             (mkLimState (m_rlimit_core m) (m_rlimit_stack m) n None) (m_time m).
+Definition with_nofile_pair (n : word) (bs : list byte) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
+            (mkLimState (m_rlimit_core m) (m_rlimit_stack m) n (Some bs))
+            (m_time m).
 Definition with_creds (c : Creds) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
             (mkProcState (m_halted m) (m_tid m) c
@@ -5238,8 +5242,9 @@ Record ProcInput := mkProcInput_full {
   in_nofile : word
     (* the SOFT RLIMIT_NOFILE the process is launched with, an
        [unsigned long] — see [LimState]'s [limst_nofile], which
-       [init_model] copies this into, and [Sys.Fs.File.dup3_spec], its
-       one reader.  [Run.valid_nofile] bounds it *);
+       [init_model] copies this into.  [Sys.Fs.File.dup3_spec] and the
+       NOFILE arm of [Sys.Kernel.Sys.prlimit64_spec] read the current
+       limit.  [Run.valid_nofile] bounds the inherited value *);
   in_sigmask : word
     (* the signals BLOCKED at the moment the process starts, as riscv64's
        one-word [sigset_t].  An input for the same reason [in_uid] is:
@@ -6767,8 +6772,8 @@ Proof. reflexivity. Qed.
 (** And the accessors of a freshly built model. *)
 
 (** The soft descriptor limit's row and column of the table above.
-    [with_nofile] runs once, in [init_model], so the column exists for the
-    accessors that read a model built by it; the row is what a proof about
+    [with_nofile] seeds the input in [init_model]; [with_nofile_pair] may
+    later replace it.  The row is what a proof about
     [Sys.Fs.File.dup3_spec] needs, since installing a descriptor rewrites
     the fd table and the limit has to survive that. *)
 
