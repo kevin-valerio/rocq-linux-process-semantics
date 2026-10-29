@@ -350,6 +350,7 @@ Definition fstat_witness (fd statbuf : word) (i : SyscallInput) (m : Model)
   | Some (FdDevNull _ _) => fstat_devnull_witness statbuf i m
   | Some FdUrandom => fstat_urandom_witness statbuf i m
   | Some (FdProcMaps _) => fstat_proc_maps_witness statbuf i m
+  | Some (FdHpagePmdSize _) => Unmodeled
   end.
 
 Lemma fstat_witness_ok : forall fd statbuf i m,

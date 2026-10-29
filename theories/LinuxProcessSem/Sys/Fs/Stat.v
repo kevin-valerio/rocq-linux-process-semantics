@@ -704,5 +704,6 @@ Definition fstat_spec (fd statbuf : word) : Sys SyscallEffect :=
                                         ([Uapi.stat_urandom_ok]), the rest pinned once
                                         under [Uapi.urandom_path] *)
   | Some (FdProcMaps _) => fstat_proc_maps_spec statbuf
+  | Some (FdHpagePmdSize _) => unmodeled
   end.
 

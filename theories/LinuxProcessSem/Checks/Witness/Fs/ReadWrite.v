@@ -97,6 +97,46 @@ Proof.
   eapply bind_step; [apply modify_ok|]. apply pure_ok.
 Qed.
 
+Definition read_hpage_pmd_size_witness (fd buf count off : word)
+    (i : SyscallInput) (m : Model) : outcome SyscallEffect :=
+  if negb (access_okb buf (bv_unsigned count))
+  then ret_outcome (errno_ret EFAULT) m
+  else
+    match file_read hpage_pmd_size_bytes off
+            (Z_to_bv 64 (rw_count_clamp count)) with
+    | [] => ret_outcome (Z_to_bv 64 0) m
+    | b :: rest =>
+        match read_bytes_map (in_wmem i) buf (Z_to_bv 64 1) with
+        | None => ret_outcome (errno_ret EFAULT) m
+        | Some _ =>
+            match read_bytes_map (in_wmem i) buf (len_word (b :: rest)) with
+            | None => Unmodeled
+            | Some _ =>
+                Ok (mkEffect (len_word (b :: rest)) [(buf, b :: rest)] [])
+                   (with_fds (fd_insert (m_fds m) fd
+                      (FdHpagePmdSize (off + len_word (b :: rest)))) m) []
+            end
+        end
+    end.
+
+Lemma read_hpage_pmd_size_witness_ok : forall fd buf count off i m,
+  read_hpage_pmd_size_spec fd buf count off i m i m
+    (read_hpage_pmd_size_witness fd buf count off i m).
+Proof.
+  intros fd buf count off i m.
+  unfold read_hpage_pmd_size_spec, read_hpage_pmd_size_witness.
+  destruct (negb (access_okb buf (bv_unsigned count))) eqn:Ha;
+    [unfold err_ret, ret_only, ret_outcome; apply pure_ok|].
+  destruct (file_read hpage_pmd_size_bytes off
+              (Z_to_bv 64 (rw_count_clamp count)))
+    as [|b rest] eqn:Hbs; [apply pure_ok|].
+  destruct (read_bytes_map (in_wmem i) buf (Z_to_bv 64 1))
+    as [w|] eqn:Hw; [|apply pure_ok].
+  destruct (read_bytes_map (in_wmem i) buf (len_word (b :: rest)))
+    as [whole|] eqn:Hwhole; [|apply unmodeled_intro].
+  eapply bind_step; [apply modify_ok|]. apply pure_ok.
+Qed.
+
 Definition read_witness (fd buf count : word) (i : SyscallInput) (m : Model)
     : outcome SyscallEffect :=
   match fd_lookup (m_fds m) fd with
@@ -253,13 +293,15 @@ Definition read_witness (fd buf count : word) (i : SyscallInput) (m : Model)
           end
       end
   | Some (FdProcMaps off) => read_proc_maps_witness fd buf count off i m
+  | Some (FdHpagePmdSize off) =>
+      read_hpage_pmd_size_witness fd buf count off i m
   end.
 
 Lemma read_witness_ok : forall fd buf count i m,
   read_spec fd buf count i m (read_witness fd buf count i m).
 Proof.
   intros. unfold read_spec, read_witness.
-  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off]|] eqn:Hfd.
+  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off|hpage_off]|] eqn:Hfd.
   9:{ (* /dev/null *)
       eapply bind_step; [apply input_ok|]. cbv beta.
       eapply bind_step; [apply get_model_ok|]. cbv beta iota zeta.
@@ -527,6 +569,9 @@ Proof.
     cbv beta iota zeta; srw Hfd. apply read_proc_maps_witness_ok.
   - eapply bind_step; [apply input_ok|]. cbv beta.
     eapply bind_step; [apply get_model_ok|].
+    cbv beta iota zeta; srw Hfd. apply read_hpage_pmd_size_witness_ok.
+  - eapply bind_step; [apply input_ok|]. cbv beta.
+    eapply bind_step; [apply get_model_ok|].
     cbv beta iota zeta; srw Hfd. apply pure_ok.
 Qed.
 
@@ -637,6 +682,7 @@ Definition write_witness (fd buf count : word) (i : SyscallInput) (m : Model)
   | Some (FdSocket _) => Unmodeled  (* writing a socket is unmodeled, permanently *)
   | Some FdUrandom => ret_outcome (errno_ret EBADF) m   (* read-only *)
   | Some (FdProcMaps _) => ret_outcome (errno_ret EBADF) m
+  | Some (FdHpagePmdSize _) => ret_outcome (errno_ret EBADF) m
   | Some (FdDevNull _ wr) =>
       if negb wr then ret_outcome (errno_ret EBADF) m
       else if negb (modeled_rw_range buf count) then Unmodeled
@@ -671,7 +717,7 @@ Lemma write_witness_ok : forall fd buf count i m,
 Proof.
   intros. unfold write_spec, write_range_gate, write_file_tail,
     write_ledger, write_witness.
-  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off]|] eqn:Hfd.
+  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off|hpage_off]|] eqn:Hfd.
   9:{ (* /dev/null *)
       destruct wr; cbn [negb]; cbv beta iota.
       2:{ eapply bind_step; [apply input_ok|]. cbv beta.
@@ -691,6 +737,9 @@ Proof.
         apply pure_ok. }
   9:{ (* /dev/urandom: -EBADF *)
       eapply bind_step; [apply input_ok|]. cbv beta.
+      eapply bind_step; [apply get_model_ok|]. cbv beta iota zeta.
+      srw Hfd. apply pure_ok. }
+  9:{ eapply bind_step; [apply input_ok|]. cbv beta.
       eapply bind_step; [apply get_model_ok|]. cbv beta iota zeta.
       srw Hfd. apply pure_ok. }
   9:{ eapply bind_step; [apply input_ok|]. cbv beta.
@@ -919,6 +968,7 @@ Definition pread64_witness (fd buf count pos : word) (i : SyscallInput)
       then ret_outcome (errno_ret EINVAL) m
       else read_urandom_witness buf count i m
   | Some (FdProcMaps _) => Unmodeled
+  | Some (FdHpagePmdSize _) => Unmodeled
   | Some FdDir =>
       if negb (access_okb buf (bv_unsigned count))
       then ret_outcome (errno_ret EFAULT) m
@@ -953,7 +1003,7 @@ Lemma pread64_witness_ok : forall fd buf count pos i m,
 Proof.
   intros. unfold pread64_spec, pread64_witness.
   destruct (ppos_einvalb pos) eqn:Hpos; [apply pure_ok|].
-  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off]|] eqn:Hfd.
+  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off|hpage_off]|] eqn:Hfd.
   9:{ (* /dev/null *)
     destruct rd; cbn [negb]; cbv beta iota;
       [ destruct (access_okb buf (bv_unsigned count)) eqn:Hok; cbn [negb];
@@ -972,6 +1022,9 @@ Proof.
       destruct (rw_pos_einvalb pos (bv_unsigned count)); cbv beta iota;
         [apply pure_ok|].
       apply read_urandom_witness_ok. }
+  9:{ eapply bind_step; [apply input_ok|]. cbv beta.
+      eapply bind_step; [apply get_model_ok|]. cbv beta iota zeta.
+      srw Hfd. apply unmodeled_intro. }
   9:{ eapply bind_step; [apply input_ok|]. cbv beta.
       eapply bind_step; [apply get_model_ok|]. cbv beta iota zeta.
       srw Hfd. apply unmodeled_intro. }
@@ -1077,6 +1130,7 @@ Definition pwrite64_witness (fd buf count pos : word) (i : SyscallInput)
   | Some (FdFileA _ _) => Unmodeled        (* see [ReadWrite.pwrite64_spec] *)
   | Some FdUrandom => ret_outcome (errno_ret EBADF) m   (* read-only *)
   | Some (FdProcMaps _) => ret_outcome (errno_ret EBADF) m
+  | Some (FdHpagePmdSize _) => ret_outcome (errno_ret EBADF) m
   | Some (FdDevNull _ wr) =>
       if negb wr then ret_outcome (errno_ret EBADF) m
       else if negb (access_okb buf (bv_unsigned count))
@@ -1113,7 +1167,7 @@ Lemma pwrite64_witness_ok : forall fd buf count pos i m,
 Proof.
   intros. unfold pwrite64_spec, pwrite64_witness.
   destruct (ppos_einvalb pos) eqn:Hpos; [apply pure_ok|].
-  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off]|] eqn:Hfd;
+  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off|hpage_off]|] eqn:Hfd;
     try (eapply bind_step; [apply input_ok|]; cbv beta;
          (eapply bind_step; [apply get_model_ok|]);
          cbv beta iota zeta; srw Hfd; apply pure_ok).
@@ -1238,6 +1292,7 @@ Definition writev_witness (fd iov iovcnt : word) (i : SyscallInput) (m : Model)
            end)
   | Some FdUrandom => ret_outcome (errno_ret EBADF) m   (* read-only *)
   | Some (FdProcMaps _) => ret_outcome (errno_ret EBADF) m
+  | Some (FdHpagePmdSize _) => ret_outcome (errno_ret EBADF) m
   | Some (FdDevNull _ wr) =>
       if negb wr then ret_outcome (errno_ret EBADF) m
       else outcome_copyins
@@ -1347,7 +1402,7 @@ Lemma writev_witness_ok : forall fd iov iovcnt i m,
   writev_spec fd iov iovcnt i m (writev_witness fd iov iovcnt i m).
 Proof.
   intros. unfold writev_witness, writev_spec, writev_file_arm, writev_ledger.
-  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off]|] eqn:Hfd.
+  destruct (fd_lookup (m_fds m) fd) as [[ch|p off|p off|p off|p off| |sk|id w|rd wr| |off|hpage_off]|] eqn:Hfd.
   9:{ (* /dev/null *)
       destruct wr.
       2:{ wvw_open Hfd. apply pure_ok. }
@@ -1355,6 +1410,7 @@ Proof.
       destruct (import_iovecs (in_mem i) iov (iovcnt32 iovcnt)) as [iovs| |] eqn:Hiv;
         (wvw_open Hfd; srw Hiv; eapply bind_step; [apply pure_ok|apply pure_ok]). }
   9:{ (* /dev/urandom: -EBADF *) wvw_open Hfd. apply pure_ok. }
+  9:{ wvw_open Hfd. apply pure_ok. }
   9:{ wvw_open Hfd. apply pure_ok. }
   - destruct (w_is0 ch) eqn:Hm.
     { wvw_open Hfd. srw Hm. apply pure_ok. }
@@ -1554,6 +1610,7 @@ Definition readv_witness (fd iov iovcnt : word) (i : SyscallInput) (m : Model)
               | RdDevNull => ret_outcome (Z_to_bv 64 0) m
               | RdUrandom => Unmodeled   (* vectored device reads decline *)
               | RdProcMaps => Unmodeled
+              | RdHpagePmdSize => Unmodeled
               | RdDir => ret_outcome (errno_ret EISDIR) m
               | RdSocket sk =>
                   match sk with
@@ -1671,13 +1728,17 @@ Proof.
     eapply bind_step; [apply get_model_ok|]. cbv beta iota zeta.
     srw Hfd; srw Hr; srw Himp; srw Htotal.
     eapply bind_step; [apply pure_ok|apply pure_ok]. }
-  destruct r as [ch|p off|p off| |sk|id| | | ].
+  destruct r as [ch|p off|p off| |sk|id| | | | ].
   7:{ eapply bind_step; [apply input_ok|]. cbv beta.
       eapply bind_step; [apply get_model_ok|]. cbv beta iota zeta.
       srw Hfd; srw Hr; srw Himp; srw Htotal.
       eapply bind_step; [apply pure_ok|apply pure_ok]. }
   7:{ (* /dev/urandom: the vectored read declines *)
       eapply bind_unmodeled2; [apply input_ok|]. cbv beta.
+      eapply bind_unmodeled2; [apply get_model_ok|]. cbv beta iota zeta.
+      srw Hfd; srw Hr; srw Himp; srw Htotal.
+      unfold readv_buf_gap. left. apply unmodeled_intro. }
+  7:{ eapply bind_unmodeled2; [apply input_ok|]. cbv beta.
       eapply bind_unmodeled2; [apply get_model_ok|]. cbv beta iota zeta.
       srw Hfd; srw Hr; srw Himp; srw Htotal.
       unfold readv_buf_gap. left. apply unmodeled_intro. }
@@ -1903,6 +1964,7 @@ Definition lseek_witness (fd off whence : word) (m : Model)
       | FdDevNull _ _ => ret_outcome (Z_to_bv 64 0) m
       | FdUrandom => ret_outcome (Z_to_bv 64 0) m
       | FdProcMaps _ => Unmodeled
+      | FdHpagePmdSize _ => Unmodeled
       | FdDir => Unmodeled   (* unmodeled: see [ReadWrite.lseek_spec] *)
       | FdFile p cur =>
           match fs_lookup (m_fs m) p with
@@ -1971,7 +2033,7 @@ Lemma lseek_witness_ok : forall fd off whence i m,
   lseek_spec fd off whence i m (lseek_witness fd off whence m).
 Proof.
   intros. unfold lseek_spec, lseek_witness.
-  destruct (fd_lookup (m_fds m) fd) as [[ch|p cur|p cur|p cur|p cur| |sk|id w|rd wr| |cur]|] eqn:Hfd;
+  destruct (fd_lookup (m_fds m) fd) as [[ch|p cur|p cur|p cur|p cur| |sk|id w|rd wr| |cur|hpage_off]|] eqn:Hfd;
     try (destruct ((SEEK_MAX <? bv_unsigned whence)%Z) eqn:Hw;
          [ eapply bind_step; [apply get_model_ok|];
            cbv beta iota; srw Hfd; apply pure_ok |]).
@@ -2051,6 +2113,8 @@ Proof.
   - (* /dev/urandom: [noop_llseek]'s pinned 0 *)
     eapply bind_step; [apply get_model_ok|].
     cbv beta iota; srw Hfd. apply pure_ok.
+  - eapply bind_step; [apply get_model_ok|].
+    cbv beta iota; srw Hfd. apply unmodeled_intro.
   - eapply bind_step; [apply get_model_ok|].
     cbv beta iota; srw Hfd. apply unmodeled_intro.
   - eapply bind_step; [apply get_model_ok|].

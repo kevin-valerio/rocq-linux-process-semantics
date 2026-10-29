@@ -246,4 +246,5 @@ Definition ioctl_spec (fd req : word) : Sys SyscallEffect :=
          be derived from that switch over a request word and a
          capability set; neither is written, so declined. *)
   | Some (FdProcMaps _) => unmodeled
+  | Some (FdHpagePmdSize _) => unmodeled
   end.

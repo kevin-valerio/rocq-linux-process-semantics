@@ -238,6 +238,7 @@ Fixpoint fd_names_path (fds : list (word * FdEntry)) (p : path) : bool :=
   | (_, FdUrandom) :: r => fd_names_path r p
     (* the same for /dev/urandom, for the same reason *)
   | (_, FdProcMaps _) :: r => fd_names_path r p
+  | (_, FdHpagePmdSize _) :: r => fd_names_path r p
   end.
 
 (** unlinkat's injectable failures: environment conditions the model does
