@@ -1,4 +1,4 @@
-(** * LinuxProcessSem.Checks.Cases.Fs.Stat — worked examples over newfstatat (79) and fstat (80)
+(** * LinuxProcessSem.Checks.Cases.Fs.Stat — worked examples over readlinkat (78), newfstatat (79) and fstat (80)
 
     Mirrors [Sys/Fs/Stat.v], which answers to Linux [fs/stat.c]: this
     file holds the worked examples for the syscalls defined there, and
@@ -32,6 +32,107 @@ Definition statat_absent_input : SyscallInput :=
 
 Definition statat_absent_model : Model :=
   init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof).
+
+(** The pathname at 0x2000 is "/proc/self/exe" plus its NUL.  The
+    three-byte output buffer at 0x4000 is writable. *)
+Definition exe_link_input : SyscallInput :=
+  mkInput 78 [AT_FDCWD; 0x2000; 0x4000; 3; 0; 0]
+    (fun a =>
+       if (bv_leu 0x2000 a && bv_ltu a 0x200f)%bool
+       then Some (nth (Z.to_nat (bv_unsigned a - 8192))
+                      (proc_self_exe_path ++ [Z_to_bv 8 0]) (Z_to_bv 8 0))
+       else None)
+    (fun a =>
+       if (bv_leu 0x4000 a && bv_ltu a 0x4003)%bool
+       then Some (Z_to_bv 8 0) else None).
+
+Example readlinkat_proc_self_exe_effects :
+  let good := mkEffectU 2 [(0x4000, [Z_to_bv 8 47; Z_to_bv 8 97])]
+                        [] [] [] [(0x2000, 15%nat)] in
+  check_syscall exe_link_input good statat_absent_model
+    = CheckOk statat_absent_model []
+  /\ check_syscall exe_link_input
+       (mkEffectU 3 [(0x4000, [Z_to_bv 8 47; Z_to_bv 8 97])]
+                  [] [] [] [(0x2000, 15%nat)]) statat_absent_model
+       = CheckReject
+  /\ check_syscall exe_link_input
+       (mkEffectU 2 [(0x4000, [Z_to_bv 8 47; Z_to_bv 8 0])]
+                  [] [] [] [(0x2000, 15%nat)]) statat_absent_model
+       = CheckReject
+  /\ check_syscall exe_link_input
+       (mkEffect 2 [(0x4000, [Z_to_bv 8 47; Z_to_bv 8 97])] [])
+       statat_absent_model = CheckReject
+  /\ check_syscall exe_link_input
+       (with_copyins [(0x2000, 15%nat)]
+          (mkEffect (errno_ret ENOENT) [] [])) statat_absent_model
+       = CheckOk statat_absent_model [].
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
+(** The size is a signed int in the Linux syscall.  Zero wins before an
+    invalid path pointer, and high register bits are discarded. *)
+Definition readlinkat_zero_size_input : SyscallInput :=
+  mkInput 78 [AT_FDCWD; 0; 0; 0; 0; 0]
+    (fun _ => None) (fun _ => None).
+
+Definition readlinkat_negative_size_input : SyscallInput :=
+  mkInput 78 [AT_FDCWD; 0; 0; Z_to_bv 64 (2 ^ 32 - 1); 0; 0]
+    (fun _ => None) (fun _ => None).
+
+Definition exe_link_high_size_input : SyscallInput :=
+  mkInput 78 [AT_FDCWD; 0x2000; 0x4000; Z_to_bv 64 (2 ^ 32 + 3); 0; 0]
+    (in_mem exe_link_input) (in_wmem exe_link_input).
+
+Example readlinkat_size_precedes_path_and_uses_low32 :
+  check_syscall readlinkat_zero_size_input
+    (mkEffect (errno_ret EINVAL) [] []) statat_absent_model
+    = CheckOk statat_absent_model []
+  /\ check_syscall readlinkat_negative_size_input
+       (mkEffect (errno_ret EINVAL) [] []) statat_absent_model
+       = CheckOk statat_absent_model []
+  /\ check_syscall exe_link_high_size_input
+       (mkEffectU 2 [(0x4000, [Z_to_bv 8 47; Z_to_bv 8 97])]
+                  [] [] [] [(0x2000, 15%nat)]) statat_absent_model
+       = CheckOk statat_absent_model [].
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
+Definition readlinkat_plain_input : SyscallInput :=
+  mkInput 78 [AT_FDCWD; 0x2000; 0x4000; 3; 0; 0]
+    (in_mem statat_absent_input) (fun _ => None).
+
+Example readlinkat_plain_path_copyin_is_charged :
+  check_syscall readlinkat_plain_input
+    (with_copyins [(0x2000, 2%nat)]
+       (mkEffect (errno_ret EINVAL) [] [])) statat_absent_model
+    = CheckOk statat_absent_model []
+  /\ check_syscall readlinkat_plain_input
+       (mkEffect (errno_ret EINVAL) [] []) statat_absent_model
+       = CheckReject.
+Proof. vm_compute. split; reflexivity. Qed.
+
+(** A positive size reaches pathname lookup.  A fault beats directory
+    lookup, while an empty path from AT_FDCWD names no symlink. *)
+Definition readlinkat_fault_input : SyscallInput :=
+  mkInput 78 [3; 0; 0; 3; 0; 0] (fun _ => None) (fun _ => None).
+
+Definition readlinkat_empty_input : SyscallInput :=
+  mkInput 78 [AT_FDCWD; 0x2000; 0; 3; 0; 0]
+    (fun a => if bv_eqb a 0x2000 then Some (Z_to_bv 8 0) else None)
+    (fun _ => None).
+
+Example readlinkat_path_errors_precede_dirfd :
+  check_syscall readlinkat_fault_input
+    (with_copyins [(0, 1%nat)]
+       (mkEffect (errno_ret EFAULT) [] [])) statat_absent_model
+    = CheckOk statat_absent_model []
+  /\ check_syscall readlinkat_empty_input
+       (with_copyins [(0x2000, 1%nat)]
+          (mkEffect (errno_ret ENOENT) [] [])) statat_absent_model
+       = CheckOk statat_absent_model []
+  /\ check_syscall readlinkat_empty_input
+       (with_copyins [(0x2000, 1%nat)]
+          (mkEffect (errno_ret EINVAL) [] [])) statat_absent_model
+       = CheckReject.
+Proof. vm_compute. repeat split; reflexivity. Qed.
 
 (** Which reason from the top of [Checks/Examples.v]: the third and the
     fourth together.  A copy-in ledger is MODEL-INTERNAL STATE that no

@@ -1675,10 +1675,10 @@ Proof.
   unfold check_getrandom, check_getrandom_zero in H. vm_frame2 H.
 Qed.
 
-Lemma check_readlinkat_frame : forall dirfd eff m m' evs,
-  check_readlinkat dirfd eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
+Lemma check_readlinkat_frame : forall i dirfd eff m m' evs,
+  check_readlinkat i dirfd eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
-  intros dirfd eff m m' evs H. unfold check_readlinkat in H. vm_frame2 H.
+  intros i dirfd eff m m' evs H. unfold check_readlinkat in H. vm_frame2 H.
 Qed.
 
 Lemma check_exit_frame : forall code eff m m' evs,
