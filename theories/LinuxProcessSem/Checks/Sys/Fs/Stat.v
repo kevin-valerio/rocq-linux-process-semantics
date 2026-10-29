@@ -53,9 +53,12 @@ Definition check_readlinkat (i : SyscallInput) (dirfd : word)
                  end
              end
       else if negb (bv_eqb dirfd AT_FDCWD32) then CheckUnmodeled
-           else check_ret_only_copyins (readlinkat_reads i) eff (errno_ret EINVAL) m []
-  | _ => if negb (bv_eqb dirfd AT_FDCWD32) then CheckUnmodeled
-         else check_ret_only_copyins (readlinkat_reads i) eff (errno_ret EINVAL) m []
+           else check_ret_only_copyins (readlinkat_reads i) eff
+                  (if path_eqb p [] then errno_ret ENOENT else errno_ret EINVAL) m []
+  | CstrTooLong => check_ret_only_copyins (readlinkat_reads i) eff
+                       (errno_ret ENAMETOOLONG) m []
+  | CstrFault => check_ret_only_copyins (readlinkat_reads i) eff
+                    (errno_ret EFAULT) m []
   end.
 
 Lemma check_readlinkat_sound_ok : forall i dirfd eff m m' evs,
@@ -127,16 +130,15 @@ Proof.
       -- apply pure_ok.
     + destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
         [discriminate|].
-      apply check_ret_only_copyins_ok_iff in H as (-> & -> & ->).
-      apply record_copyins_ok_empty; [reflexivity|].
-      unfold err_ret, ret_only. apply pure_ok.
-  - destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
-      [discriminate|].
+      destruct (path_eqb p []).
+      all: apply check_ret_only_copyins_ok_iff in H as (-> & -> & ->).
+      all: apply record_copyins_ok_empty; [reflexivity|].
+      all: unfold err_ret, ret_only; apply pure_ok.
+  -
     apply check_ret_only_copyins_ok_iff in H as (-> & -> & ->).
     apply record_copyins_ok_empty; [reflexivity|].
     unfold err_ret, ret_only. apply pure_ok.
-  - destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
-      [discriminate|].
+  -
     apply check_ret_only_copyins_ok_iff in H as (-> & -> & ->).
     apply record_copyins_ok_empty; [reflexivity|].
     unfold err_ret, ret_only. apply pure_ok.
@@ -189,12 +191,11 @@ Proof.
         discriminate.
     + destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
         [apply unmodeled_intro|].
+      destruct (path_eqb p []);
       now apply check_ret_only_copyins_no_unmodeled in H.
-  - destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
-      [apply unmodeled_intro|].
+  -
     now apply check_ret_only_copyins_no_unmodeled in H.
-  - destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
-      [apply unmodeled_intro|].
+  -
     now apply check_ret_only_copyins_no_unmodeled in H.
 Qed.
 
@@ -239,14 +240,13 @@ Proof.
         reflexivity.
     + destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
         [unfold unmodeled in H; discriminate|].
-      unfold err_ret, ret_only, pure in H. inversion H; subst.
-      cbn [eff_copyins app]. apply check_ret_only_copyins_refl.
-  - destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
-      [unfold unmodeled in H; discriminate|].
+      destruct (path_eqb p []).
+      all: unfold err_ret, ret_only, pure in H; inversion H; subst.
+      all: cbn [eff_copyins app]; apply check_ret_only_copyins_refl.
+  -
     unfold err_ret, ret_only, pure in H. inversion H; subst.
     cbn [eff_copyins app]. apply check_ret_only_copyins_refl.
-  - destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
-      [unfold unmodeled in H; discriminate|].
+  -
     unfold err_ret, ret_only, pure in H. inversion H; subst.
     cbn [eff_copyins app]. apply check_ret_only_copyins_refl.
 Qed.
@@ -277,12 +277,11 @@ Proof.
         inv_ok; discriminate.
     + destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
         [reflexivity|].
-      unfold err_ret, ret_only, pure in H. discriminate.
-  - destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
-      [reflexivity|].
+      destruct (path_eqb p []);
+        unfold err_ret, ret_only, pure in H; discriminate.
+  -
     unfold err_ret, ret_only, pure in H. discriminate.
-  - destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd;
-      [reflexivity|].
+  -
     unfold err_ret, ret_only, pure in H. discriminate.
 Qed.
 

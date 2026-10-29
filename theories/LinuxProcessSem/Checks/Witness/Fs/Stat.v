@@ -39,9 +39,10 @@ Definition readlinkat_witness (i : SyscallInput) (dirfd : word) (m : Model)
                  Ok (mkEffect (len_word bs) [(buf, bs)] []) m []
              end
       else if negb (bv_eqb dirfd AT_FDCWD32) then Unmodeled
-           else ret_outcome (errno_ret EINVAL) m
-  | _ => if negb (bv_eqb dirfd AT_FDCWD32) then Unmodeled
-         else ret_outcome (errno_ret EINVAL) m
+           else ret_outcome
+                  (if path_eqb p [] then errno_ret ENOENT else errno_ret EINVAL) m
+  | CstrTooLong => ret_outcome (errno_ret ENAMETOOLONG) m
+  | CstrFault => ret_outcome (errno_ret EFAULT) m
   end).
 
 Lemma readlinkat_witness_ok : forall i dirfd m,
@@ -79,13 +80,10 @@ Proof.
         -- apply pure_ok.
     + destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd.
       * apply unmodeled_intro.
-      * unfold err_ret, ret_only, ret_outcome. apply pure_ok.
-  - destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd.
-    + apply unmodeled_intro.
-    + unfold err_ret, ret_only, ret_outcome. apply pure_ok.
-  - destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd.
-    + apply unmodeled_intro.
-    + unfold err_ret, ret_only, ret_outcome. apply pure_ok.
+      * destruct (path_eqb p []);
+        unfold err_ret, ret_only, ret_outcome; apply pure_ok.
+  - unfold err_ret, ret_only, ret_outcome. apply pure_ok.
+  - unfold err_ret, ret_only, ret_outcome. apply pure_ok.
 Qed.
 
 (** newfstatat: a path errno (-ENAMETOOLONG / -EFAULT / -ENOENT) or

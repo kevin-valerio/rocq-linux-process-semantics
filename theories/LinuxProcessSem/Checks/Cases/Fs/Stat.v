@@ -109,6 +109,31 @@ Example readlinkat_plain_path_copyin_is_charged :
        = CheckReject.
 Proof. vm_compute. split; reflexivity. Qed.
 
+(** A positive size reaches pathname lookup.  A fault beats directory
+    lookup, while an empty path from AT_FDCWD names no symlink. *)
+Definition readlinkat_fault_input : SyscallInput :=
+  mkInput 78 [3; 0; 0; 3; 0; 0] (fun _ => None) (fun _ => None).
+
+Definition readlinkat_empty_input : SyscallInput :=
+  mkInput 78 [AT_FDCWD; 0x2000; 0; 3; 0; 0]
+    (fun a => if bv_eqb a 0x2000 then Some (Z_to_bv 8 0) else None)
+    (fun _ => None).
+
+Example readlinkat_path_errors_precede_dirfd :
+  check_syscall readlinkat_fault_input
+    (with_copyins [(0, 1%nat)]
+       (mkEffect (errno_ret EFAULT) [] [])) statat_absent_model
+    = CheckOk statat_absent_model []
+  /\ check_syscall readlinkat_empty_input
+       (with_copyins [(0x2000, 1%nat)]
+          (mkEffect (errno_ret ENOENT) [] [])) statat_absent_model
+       = CheckOk statat_absent_model []
+  /\ check_syscall readlinkat_empty_input
+       (with_copyins [(0x2000, 1%nat)]
+          (mkEffect (errno_ret EINVAL) [] [])) statat_absent_model
+       = CheckReject.
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
 (** Which reason from the top of [Checks/Examples.v]: the third and the
     fourth together.  A copy-in ledger is MODEL-INTERNAL STATE that no
     observation of a real execution reveals — Linux returns the same

@@ -49,10 +49,10 @@ Definition readlinkat_bufsiz (i : SyscallInput) : word :=
     -EINVAL before any pathname read, as [do_readlinkat] does.  Only the
     procfs executable link has a success arm.  The absolute path ignores
     [dirfd], as Linux and QEMU do.  The
-    old AT_FDCWD error arm remains for paths represented by the flat,
-    symlink-free file system.  That old arm can reject real -ENOENT or
-    -EFAULT results for other pathnames; this change covers only the
-    exact procfs path. *)
+    old AT_FDCWD error arm remains for nonempty paths represented by the
+    flat, symlink-free file system.  Other path resolutions can return
+    -ENOENT and remain outside that arm.  Pathname faults, overlong
+    names, and an empty AT_FDCWD pathname have their kernel errnos. *)
 Definition readlinkat_spec (dirfd : word) : Sys SyscallEffect :=
   i <- input ;;
   if (sint32 (in_arg i 3) <=? 0)%Z then err_ret EINVAL else
@@ -75,9 +75,9 @@ Definition readlinkat_spec (dirfd : word) : Sys SyscallEffect :=
                     pure (mkEffect (len_word bs) [(buf, bs)] []))
              end
       else if negb (bv_eqb dirfd AT_FDCWD32) then unmodeled
-           else err_ret EINVAL
-  | _ => if negb (bv_eqb dirfd AT_FDCWD32) then unmodeled
-         else err_ret EINVAL
+           else if path_eqb p [] then err_ret ENOENT else err_ret EINVAL
+  | CstrTooLong => err_ret ENAMETOOLONG
+  | CstrFault => err_ret EFAULT
   end).
 
 (** The flag WORDS [newfstatat_spec] interprets: 0 (plain [stat]) and
