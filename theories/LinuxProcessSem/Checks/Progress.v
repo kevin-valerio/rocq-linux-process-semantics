@@ -54,6 +54,7 @@ From LinuxProcessSemantics.LinuxProcessSem.Checks.Witness Require Export
   Kernel.Sched.Syscalls Kernel.Signal Kernel.Sys
   Kernel.Time.Hrtimer Kernel.Time.PosixTimers Kernel.Time.Time
   Net.Socket
+  Arch.Riscv.Hwprobe
   Drivers.Char.Random.
 
 (** The witness for this input's syscall, from the same table the spec and

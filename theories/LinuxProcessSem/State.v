@@ -3389,6 +3389,11 @@ Record ProcState := mkProcState {
        inode, and the difference shows only where two paths name one
        inode or one path names two -- neither of which [Fs]'s flat,
        link-free namespace can express (Fs.v). *)
+;
+  procst_hwprobe : option (word * word)
+    (* The extension and scalar misaligned performance words returned by
+       riscv_hwprobe for all online CPUs.  The launch input fixes them for
+       the run, as it fixes AT_HWCAP.  None leaves this query unmodeled. *)
 }.
 
 (** The resource limits the process has been observed to have. *)
@@ -3529,6 +3534,8 @@ Definition m_utsname (m : Model) : option (list byte) :=
   procst_utsname (m_proc m).
 Definition m_statpins (m : Model) : list (Fs.path * list byte) :=
   procst_statpins (m_proc m).
+Definition m_hwprobe (m : Model) : option (word * word) :=
+  procst_hwprobe (m_proc m).
 Definition m_rlimit_core (m : Model) : option (list byte) := limst_core (m_lim m).
 Definition m_nofile (m : Model) : word := limst_nofile (m_lim m).
 Definition m_clock (m : Model) : word := timest_clock (m_time m).
@@ -3576,7 +3583,7 @@ Definition mkModel (fds : list (word * FdEntry)) (vm : VmMaps)
             (mkProcState halted tid
                (mkCreds overflow_id overflow_id overflow_id
                         overflow_id overflow_id overflow_id [])
-               false (Z_to_bv 64 0) false None false false false false [])
+               false (Z_to_bv 64 0) false None false false false false [] None)
             (mkLimState rlim default_nofile)
             (mkTimeState (Z_to_bv 64 0)).
 
@@ -3651,7 +3658,7 @@ Definition with_fs (fs : Fs.Fs) (m : Model) : Model :=
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
                          (m_abort_terminal m)
-                         (statpins_restrict fs (m_statpins m)))
+                         (statpins_restrict fs (m_statpins m)) (m_hwprobe m))
             (m_lim m) (m_time m).
 (** Halt the process by an EXIT, which is the other half of what the
     kill flag distinguishes: this clears it, so a model this produced has
@@ -3667,7 +3674,7 @@ Definition with_halted (code : word) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          false (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_hwprobe m))
             (m_lim m) (m_time m).
 Definition with_tid (tid : word) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
@@ -3676,7 +3683,7 @@ Definition with_tid (tid : word) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_hwprobe m))
             (m_lim m) (m_time m).
 Definition with_rlimit_core (bs : list byte) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
@@ -3698,7 +3705,7 @@ Definition with_utsname (bs : list byte) (m : Model) : Model :=
                          (m_has_children m) (Some bs)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_hwprobe m))
             (m_lim m) (m_time m).
 (** Look a file's stat pin up by path.  [None] means no [fstat] has
     delivered a [struct stat] for that file yet, which is the branch
@@ -3734,7 +3741,7 @@ Definition with_statpin (p : Fs.path) (bs : list byte) (m : Model) : Model :=
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
                          (m_abort_terminal m)
-                         ((p, bs) :: m_statpins m))
+                         ((p, bs) :: m_statpins m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
 (** Seed the soft descriptor limit.  Its only caller is [init_model], for
@@ -3760,7 +3767,18 @@ Definition with_abort_terminal (b : bool) (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m) b
-                         (m_statpins m))
+                         (m_statpins m) (m_hwprobe m))
+            (m_lim m) (m_time m).
+
+(** Install the hardware probe snapshot supplied by [ProcInput]. *)
+Definition with_hwprobe (h : option (word * word)) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
+            (mkProcState (m_halted m) (m_tid m) (m_creds m)
+                         (m_setsid_succeeded m) (m_sigmask m)
+                         (m_has_children m) (m_utsname m)
+                         (m_sigaltstack_installed m)
+                         (procst_killed (m_proc m)) (m_sigabrt_pending m)
+                         (m_abort_terminal m) (m_statpins m) h)
             (m_lim m) (m_time m).
 
 Definition with_nofile (n : word) (m : Model) : Model :=
@@ -3773,7 +3791,7 @@ Definition with_creds (c : Creds) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_hwprobe m))
             (m_lim m) (m_time m).
 Definition with_setsid_succeeded (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
@@ -3781,7 +3799,7 @@ Definition with_setsid_succeeded (m : Model) : Model :=
                          true (m_sigmask m) (procst_children (m_proc m))
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
 (** Record that the process now has something to reap.
@@ -3807,7 +3825,7 @@ Definition with_children (m : Model) : Model :=
                          (m_setsid_succeeded m) (m_sigmask m) true
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_hwprobe m))
             (m_lim m) (m_time m).
 (** Install a new blocked mask.  [Kernel.Signal.rt_sigprocmask_spec] is
     the only caller, and the only kernel path that reaches
@@ -3827,7 +3845,7 @@ Definition with_sigmask (s : word) (m : Model) : Model :=
                          (m_setsid_succeeded m) s (m_has_children m)
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
 (** Record that a [sigaltstack] has installed an alternate stack.
@@ -3854,7 +3872,7 @@ Definition with_sigaltstack_installed (m : Model) : Model :=
                          (m_setsid_succeeded m) (m_sigmask m)
                          (m_has_children m) (m_utsname m) true
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
 (** Record that SIGABRT has been sent and is BLOCKED, so it waits in
@@ -3879,7 +3897,7 @@ Definition with_sigabrt_pending (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) true (m_abort_terminal m)
-                         (m_statpins m))
+                         (m_statpins m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
 (** End the process by a fatal signal.  It writes the signal number into
@@ -3909,7 +3927,7 @@ Definition with_killed (sig : word) (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          true (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
 (** The invariant the two fields are written under, stated where the
@@ -5328,10 +5346,14 @@ Record ProcInput := mkProcInput_full {
        [Run.valid_input] has NO clause naming it: [fs_seed_tmp] seeds
        any list into the canonical form, so every value is one a launch
        could present ([fs_seed_tmp_valid]). *)
+;
+  in_hwprobe : option (word * word)
+    (* The stable response to a two-key riscv_hwprobe query for all online
+       CPUs: IMA_EXT_0 and CPUPERF_0.  None declines the query. *)
 }.
 
-(** THE POSITIONAL-LITERAL FORM: every field except the two ENVIRONMENT
-    fields at the end of the record ([in_urandom], [in_tmp]).
+(** THE POSITIONAL-LITERAL FORM: every field except the three ENVIRONMENT
+    fields at the end of the record ([in_urandom], [in_tmp], [in_hwprobe]).
 
     The record's own constructor is [mkProcInput_full] and takes every
     field.  This takes the first thirteen, in that order,
@@ -5364,7 +5386,7 @@ Definition mkProcInput
     (nofile sigmask hwcap : word) (abort_terminal : bool)
     (va_size : VaSize) : ProcInput :=
   mkProcInput_full argv envp image_fs stdin uid gid groups net
-    nofile sigmask hwcap abort_terminal va_size default_urandom [].
+    nofile sigmask hwcap abort_terminal va_size default_urandom [] None.
 
 (** THE FILE SYSTEM THE RUN STARTS WITH: the image, with the run's
     declared private /tmp seeded into it under absolute keys.
@@ -5428,6 +5450,8 @@ Definition in_fs (inp : ProcInput) : Fs.Fs :=
 
 Definition init_model (reserved : list (word * word)) (brk0 mbase sp : word)
     (lim : Z) (inp : ProcInput) : Model :=
+  with_hwprobe (in_hwprobe inp)
+  (
   with_abort_terminal (in_abort_terminal inp)
   (with_sigmask (in_sigmask inp)
   (with_nofile (in_nofile inp)
@@ -5445,7 +5469,7 @@ Definition init_model (reserved : list (word * word)) (brk0 mbase sp : word)
        (in_fs inp)
        None
        None
-       None)))))).
+       None))))))).
 
 (** The base case of the nonemptiness invariant: a run starts with NO
     protected range at all.  Every reachable [vm_noaccess] is therefore

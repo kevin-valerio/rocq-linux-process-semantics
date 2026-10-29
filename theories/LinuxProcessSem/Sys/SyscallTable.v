@@ -33,6 +33,7 @@ From LinuxProcessSemantics.LinuxProcessSem.Sys Require Export
   Kernel.Signal Kernel.Sys
   Kernel.Time.Hrtimer Kernel.Time.PosixTimers Kernel.Time.Time
   Net.Socket
+  Arch.Riscv.Hwprobe
   Drivers.Char.Random.
 Import ListNotations.
 Open Scope bv_scope.
@@ -126,6 +127,7 @@ Definition spec_table : list SpecArm :=
   (* mprotect        *) mkSpecArm 226%Z (fun i => mprotect_spec (in_arg i 0) (in_arg i 1) (in_arg i 2) i) ::
   (* madvise         *) mkSpecArm 233%Z (fun i => madvise_spec (in_arg i 0) (in_arg i 1) (int32 (in_arg i 2)) i) ::
   (* accept4         *) mkSpecArm 242%Z (fun i => accept4_spec (fd32 (in_arg i 0)) (in_arg i 1) (in_arg i 2) (in_arg i 3) i) ::
+  (* riscv_hwprobe   *) mkSpecArm 258%Z (fun i => riscv_hwprobe_spec (in_arg i 0) (in_arg i 1) (in_arg i 2) (in_arg i 3) (flag32 (in_arg i 4)) i) ::
   (* wait4           *) mkSpecArm 260%Z (fun i => wait4_spec (pid32 (in_arg i 0)) (in_arg i 1) (waitopts32 (in_arg i 2)) (in_arg i 3) i) ::
   (* prlimit64       *) mkSpecArm 261%Z (fun i => prlimit64_spec (in_arg i 0) (in_arg i 1) (in_arg i 2) (in_arg i 3) i) ::
   (* getrandom       *) mkSpecArm 278%Z (fun i => getrandom_spec (in_arg i 0) (in_arg i 1) (in_arg i 2) i) ::

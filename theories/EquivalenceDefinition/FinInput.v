@@ -486,7 +486,9 @@ Record FinProcInput := mkFinProcInput {
     (* the run's declared private /tmp, mirroring [State.in_tmp].  It
        is already inductive -- a [Fs.Fs] is a list -- so unlike
        [fin_stdin] and [fin_urandom] it adds no clause to
-       [finite_input].  It is NOT part of [fin_core] -- see there *)
+       [finite_input].  It is NOT part of [fin_core] -- see there *);
+  fin_hwprobe : option (word * word)
+    (* the fixed hardware probe response, mirroring [State.in_hwprobe] *)
 }.
 
 (** The process input a [FinProcInput] denotes.  Built with
@@ -500,7 +502,7 @@ Definition to_proc_input (f : FinProcInput) : ProcInput :=
               (fin_nofile f) (fin_sigmask f) (fin_hwcap f)
               (fin_abort_terminal f) (fin_va_size f)
               (stream_of_list_then (fin_urandom f) State.default_urandom)
-              (fin_tmp f).
+              (fin_tmp f) (fin_hwprobe f).
 
 (** Validity of a finite input is validity of the input it denotes —
     [Run.valid_input] and nothing else.  Deliberately not a new
@@ -656,17 +658,18 @@ Lemma fin_core_env_eq : forall f g,
   fin_nofile f = fin_nofile g ->
   fin_sigmask f = fin_sigmask g ->
   fin_hwcap f = fin_hwcap g ->
+  fin_hwprobe f = fin_hwprobe g ->
   fin_abort_terminal f = fin_abort_terminal g ->
   fin_va_size f = fin_va_size g ->
   f = g.
 Proof.
-  intros [a1 e1 fs1 s1 u1 g1 gs1 n1 nf1 sm1 hc1 ab1 va1 r1 tm1]
-         [a2 e2 fs2 s2 u2 g2 gs2 n2 nf2 sm2 hc2 ab2 va2 r2 tm2]
-    Hcore Htm Hr Hu Hg Hgs Hn Hnf Hsm Hhc Hab Hva.
+  intros [a1 e1 fs1 s1 u1 g1 gs1 n1 nf1 sm1 hc1 ab1 va1 r1 tm1 hp1]
+         [a2 e2 fs2 s2 u2 g2 gs2 n2 nf2 sm2 hc2 ab2 va2 r2 tm2 hp2]
+    Hcore Htm Hr Hu Hg Hgs Hn Hnf Hsm Hhc Hhp Hab Hva.
   unfold fin_core in Hcore.
   cbn [fin_argv fin_envp fin_image_fs fin_tmp fin_stdin fin_urandom fin_uid fin_gid fin_groups fin_net
-       fin_nofile fin_sigmask fin_hwcap fin_abort_terminal fin_va_size]
-    in Hcore, Htm, Hr, Hu, Hg, Hgs, Hn, Hnf, Hsm, Hhc, Hab, Hva.
+       fin_nofile fin_sigmask fin_hwcap fin_hwprobe fin_abort_terminal fin_va_size]
+    in Hcore, Htm, Hr, Hu, Hg, Hgs, Hn, Hnf, Hsm, Hhc, Hhp, Hab, Hva.
   injection Hcore as Ha He Hfs Hs.
   subst. reflexivity.
 Qed.
@@ -711,7 +714,7 @@ Proof.
                      (repeat (Z_to_bv 64 0) n) (fin_net f) (fin_nofile f) (fin_sigmask f)
                      (fin_hwcap f)
                      (fin_abort_terminal f) (fin_va_size f)
-                     (fin_urandom f) (fin_tmp f)).
+                     (fin_urandom f) (fin_tmp f) (fin_hwprobe f)).
   split; [| split].
   - intros n. reflexivity.
   - intros m n Heq.
@@ -767,8 +770,8 @@ Lemma to_proc_input_inj : forall f g,
   fin_urandom f = fin_urandom g ->
   f = g.
 Proof.
-  intros [a1 e1 fs1 s1 u1 g1 gs1 n1 nf1 sm1 hc1 ab1 va1 r1 tm1]
-         [a2 e2 fs2 s2 u2 g2 gs2 n2 nf2 sm2 hc2 ab2 va2 r2 tm2] H Hr.
+  intros [a1 e1 fs1 s1 u1 g1 gs1 n1 nf1 sm1 hc1 ab1 va1 r1 tm1 hp1]
+         [a2 e2 fs2 s2 u2 g2 gs2 n2 nf2 sm2 hc2 ab2 va2 r2 tm2 hp2] H Hr.
   cbn [fin_urandom] in Hr.
   unfold to_proc_input in H.
   cbn [fin_argv fin_envp fin_image_fs fin_tmp fin_stdin fin_urandom fin_uid fin_gid fin_groups fin_net
@@ -777,7 +780,7 @@ Proof.
   (* the constructor's order, with the two ENVIRONMENT fields last:
      argv, envp, image, stdin, the ids, the queue, the limits, the
      declarations, then [in_urandom] and [in_tmp] *)
-  injection H as Ha He Hfs Hs Hu Hg Hgs Hn Hnf Hsm Hhc Hab Hva _ Htm.
+  injection H as Ha He Hfs Hs Hu Hg Hgs Hn Hnf Hsm Hhc Hab Hva _ Htm Hhp.
   apply stream_of_list_inj in Hs.
   subst. reflexivity.
 Qed.
@@ -791,12 +794,12 @@ Lemma to_proc_input_not_inj :
 Proof.
   pose (base := mkFinProcInput [] [] []
                   [] (Z_to_bv 64 0) (Z_to_bv 64 0) [] net_silent
-                  (Z_to_bv 64 0) (Z_to_bv 64 0) (Z_to_bv 64 0) false Sv48 [] []).
+                  (Z_to_bv 64 0) (Z_to_bv 64 0) (Z_to_bv 64 0) false Sv48 [] [] None).
   exists base.
   exists (mkFinProcInput [] [] []
             [] (Z_to_bv 64 0) (Z_to_bv 64 0) [] net_silent
             (Z_to_bv 64 0) (Z_to_bv 64 0) (Z_to_bv 64 0) false Sv48
-            [Z_to_bv 8 0] []).
+            [Z_to_bv 8 0] [] None).
   split.
   - intro Hc. apply (f_equal fin_urandom) in Hc.
     unfold base in Hc. cbn [fin_urandom] in Hc. discriminate Hc.
@@ -817,11 +820,11 @@ Proof.
   (* [State.ProcInput]'s constructor order, the two ENVIRONMENT fields
      last: argv, envp, image, stdin, ids, queue, limits, declarations,
      then [in_urandom] and [in_tmp] *)
-  intros [a e fs s u g gs n nf sm hc ab va r tm] Hfin.
+  intros [a e fs s u g gs n nf sm hc ab va r tm hp] Hfin.
   unfold finite_input in Hfin. cbn [in_stdin in_urandom] in Hfin.
   destruct Hfin as [Hfin [lr Hlr]].
   destruct (finite_stream_of_list _ Hfin) as [l Hl].
-  exists (mkFinProcInput a e fs l u g gs n nf sm hc ab va lr tm).
+  exists (mkFinProcInput a e fs l u g gs n nf sm hc ab va lr tm hp).
   unfold to_proc_input.
   cbn [fin_argv fin_envp fin_image_fs fin_tmp fin_stdin fin_urandom fin_uid fin_gid fin_groups fin_net
        fin_nofile fin_sigmask fin_hwcap fin_abort_terminal fin_va_size].
@@ -883,7 +886,7 @@ Lemma valid_input_stdin_irrelevant : forall inp s,
   valid_input (mkProcInput_full (in_argv inp) (in_envp inp) (in_image_fs inp) s
                  (in_uid inp) (in_gid inp) (in_groups inp) (in_net inp)
                  (in_nofile inp) (in_sigmask inp) (in_hwcap inp) (in_abort_terminal inp) (in_va_size inp)
-                 (in_urandom inp) (in_tmp inp)).
+                 (in_urandom inp) (in_tmp inp) (in_hwprobe inp)).
 Proof. intros inp s H. exact H. Qed.
 
 (** THE RANDOM DEVICE'S STREAM IS NOT LIKE STANDARD INPUT.
@@ -902,7 +905,7 @@ Lemma valid_input_urandom_endless_irrelevant : forall inp r,
                  (in_stdin inp)
                  (in_uid inp) (in_gid inp) (in_groups inp) (in_net inp)
                  (in_nofile inp) (in_sigmask inp) (in_hwcap inp) (in_abort_terminal inp) (in_va_size inp)
-                 r (in_tmp inp)).
+                 r (in_tmp inp) (in_hwprobe inp)).
 Proof.
   intros inp r H Hr.
   (* [valid_input] has eleven conjuncts: keep the first ten and replace the last ([valid_urandom]) with [Hr]. *)
@@ -921,7 +924,7 @@ Lemma valid_fin_input_stdin_irrelevant : forall f l,
                      l
                      (fin_uid f) (fin_gid f) (fin_groups f) (fin_net f)
                      (fin_nofile f) (fin_sigmask f) (fin_hwcap f) (fin_abort_terminal f) (fin_va_size f)
-                     (fin_urandom f) (fin_tmp f)).
+                     (fin_urandom f) (fin_tmp f) (fin_hwprobe f)).
 Proof. intros f l H. exact H. Qed.
 
 (** And the byte list in [fin_urandom] is unconstrained too — even
@@ -946,7 +949,8 @@ Lemma valid_input_tmp_arbitrary : forall inp t,
                  (in_stdin inp)
                  (in_uid inp) (in_gid inp) (in_groups inp) (in_net inp)
                  (in_nofile inp) (in_sigmask inp) (in_hwcap inp)
-                 (in_abort_terminal inp) (in_va_size inp) (in_urandom inp) t).
+                 (in_abort_terminal inp) (in_va_size inp) (in_urandom inp) t
+                 (in_hwprobe inp)).
 Proof.
   intros inp t Him H. unfold valid_input in H |- *.
   destruct H as (Ha & He & _ & Hrest).
@@ -961,7 +965,7 @@ Lemma valid_fin_input_urandom_irrelevant : forall f l,
                      (fin_stdin f)
                      (fin_uid f) (fin_gid f) (fin_groups f) (fin_net f)
                      (fin_nofile f) (fin_sigmask f) (fin_hwcap f) (fin_abort_terminal f) (fin_va_size f)
-                     l (fin_tmp f)).
+                     l (fin_tmp f) (fin_hwprobe f)).
 Proof.
   intros f l H.
   (* Eleven conjuncts: keep the first ten and prove the last ([valid_urandom]) from the padding. *)
@@ -990,7 +994,7 @@ Qed.
 Definition inhabited_fin_input : FinProcInput :=
   mkFinProcInput [[]] [] [] [] (Z_to_bv 64 0) (Z_to_bv 64 0) [] net_silent
                  default_nofile (Z_to_bv 64 0) StackLayout.hwcap_rv64gc
-                 false Sv48 [] [].
+                 false Sv48 [] [] None.
 
 (** THE FINITE-RECORD QUANTIFIER IS NOT EMPTY, which is the one the
     classifier and gated-size shapes are written over. *)
@@ -1047,12 +1051,12 @@ Lemma valid_input_not_finite : forall inp,
                  all_zeros
                  (in_uid inp) (in_gid inp) (in_groups inp) (in_net inp)
                  (in_nofile inp) (in_sigmask inp) (in_hwcap inp) (in_abort_terminal inp) (in_va_size inp)
-                 (in_urandom inp) (in_tmp inp))
+                 (in_urandom inp) (in_tmp inp) (in_hwprobe inp))
   /\ ~ finite_input (mkProcInput_full (in_argv inp) (in_envp inp) (in_image_fs inp)
                       all_zeros
                       (in_uid inp) (in_gid inp) (in_groups inp) (in_net inp)
                       (in_nofile inp) (in_sigmask inp) (in_hwcap inp) (in_abort_terminal inp) (in_va_size inp)
-                      (in_urandom inp) (in_tmp inp)).
+                      (in_urandom inp) (in_tmp inp) (in_hwprobe inp)).
 Proof.
   intros inp H. split.
   - apply valid_input_stdin_irrelevant, H.
