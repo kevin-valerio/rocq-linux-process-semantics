@@ -347,21 +347,16 @@ Definition rlim64_wf (bs : list byte) : bool :=
     [prlimit64] regardless — its [getrlimit]/[setrlimit] try
     [SYS_prlimit64] first and only fall back on -ENOSYS.
 
-    ONLY [RLIMIT_CORE] IS MODELED.  Every other resource id is
-    [unmodeled] (fail closed).  This is not caution about ids nobody
-    uses; five of them would CONTRADICT the rest of this model if an
-    arm answered them, three by disagreeing with state the model keeps
-    and two by promising an errno it never raises:
+    Reads of [RLIMIT_STACK] and [RLIMIT_NOFILE] are also modeled in
+    their scoped arms below.  Other resource ids are [unmodeled].
 
     - [RLIMIT_STACK] is ALREADY modeled, as [State.stack_max_size] = 8
       MiB.  It is observable — [Run.init_machine_state] zero-maps exactly
       [[init_sp - stack_max_size, init_sp)] and a store outside that
       window is a [RiscvSemantics.MachineFault] — and it also fixes
-      [State.alloc_top] relative to the run's stack pointer.  It is a
-      CONSTANT, so a [setrlimit] that
-      claimed to change it would be a lie, and a [getrlimit] arm would
-      have to answer the 8 MiB soft limit while claiming a hard limit the
-      model does not represent.
+      [State.alloc_top] relative to the run's stack pointer.  It is
+      constant in this model.  A read answers with that soft limit and
+      pins the inherited hard limit.  A set remains unmodeled.
     - [RLIMIT_AS] and [RLIMIT_DATA] are the real kernel checks
       ([may_expand_vm]) that this file already names, at the mremap and
       mprotect notes above, as the reason -ENOMEM stays INJECTABLE rather
@@ -380,19 +375,11 @@ Definition rlim64_wf (bs : list byte) : bool :=
       Linux's own [MAX_RW_COUNT], which is a different limit with a
       different failure.  An arm reporting a file-size limit would
       promise an enforcement no spec in this file performs.
-    - [RLIMIT_NOFILE] is the one the model HOLDS —
-      [State.limst_nofile], the SOFT limit, an input of the run seeded by
-      [State.init_model] and read by [Fs.File.dup3_spec] — and it is
-      declined here, for two reasons.
-      Answering a READ would have to fill in a whole [struct rlimit64],
-      and the HARD limit is not carried: nothing reads it, so nothing
-      obliged the record to hold it.  Answering the soft one alone would
-      also hand a program a bound the fd allocator does not honour —
-      [File.lowest_fd] ignores it.  And answering a SET
-      would make the field MUTABLE, which [Fs.File.dup3_spec]'s gate is
-      built on it not being: that spec tests one number for the whole
-      run.  Widening this arm to RLIMIT_NOFILE therefore has three
-      obligations, not one.
+    - [RLIMIT_NOFILE] has a modeled read when its soft limit exceeds
+      every descriptor the allocator can return.  The soft limit comes
+      from [State.in_nofile]; the inherited hard limit is pinned on the
+      first read.  A set remains unmodeled because it would change the
+      limit used by descriptor allocation.
 
     [RLIMIT_CORE] is safe for the opposite reason: this model has no
     signals, no [MachineFault]-to-core-dump path, and the only channel
@@ -554,7 +541,7 @@ Definition rlim64_wf (bs : list byte) : bool :=
     pointers, a set before a read or one changing the hard limit — are
     where the refusal begins, and keeping source binaries
     away from them is the job of whoever chooses the source. *)
-Definition prlimit64_spec (pid resource new_rlim old_rlim : word)
+Definition prlimit64_core_spec (pid resource new_rlim old_rlim : word)
     : Sys SyscallEffect :=
   if negb (w_is0 pid) then unmodeled            (* (1) no other task exists *)
   else if negb (Z.eqb (bv_unsigned resource) RLIMIT_CORE) then unmodeled  (* (2) *)
@@ -596,6 +583,132 @@ Definition prlimit64_spec (pid resource new_rlim old_rlim : word)
             else set_rlimit_core nb ;; ret_only (Z_to_bv 64 0))
         end
     end.
+
+(** The stack mapping in this model has a fixed 8 MiB soft limit.  A
+    read may reveal any inherited hard limit at least that large.  The
+    first read records its bytes, so later reads return the same pair. *)
+Definition rlim64_stack_wf (bs : list byte) : bool :=
+  (rlim64_wf bs && bv_eqb (rlim64_soft bs) (Z_to_bv 64 stack_max_size))%bool.
+
+Definition prlimit64_stack_spec (pid new_rlim old_rlim : word)
+    : Sys SyscallEffect :=
+  if negb (w_is0 pid) then unmodeled
+  else if negb (w_is0 new_rlim) then unmodeled
+  else if w_is0 old_rlim then unmodeled
+  else
+    i <- input ;;
+    m <- get_model ;;
+    match read_bytes_map (in_wmem i) old_rlim (Z_to_bv 64 16) with
+    | None =>
+        if negb (access_okb old_rlim 16) then err_ret EFAULT
+        else unmodeled
+    | Some _ =>
+        match m_rlimit_stack m with
+        | Some bs => pure (mkEffect (Z_to_bv 64 0) [(old_rlim, bs)] [])
+        | None =>
+            bs <- choose (fun bs : list byte => rlim64_stack_wf bs = true) ;;
+            set_rlimit_stack bs ;;
+            pure (mkEffect (Z_to_bv 64 0) [(old_rlim, bs)] [])
+        end
+    end.
+
+(** The allocator can return at most descriptor 8193.  Above that soft
+    limit, the model's allocation path stays below RLIMIT_NOFILE.  The
+    hard limit is inherited, at least the soft limit, and no larger than
+    Linux's absolute [sysctl_nr_open_max] on RV64 (2^31 - 64). *)
+Definition rlim64_nofile_ready_b (m : Model) : bool :=
+  ((8193 <? bv_unsigned (m_nofile m))%Z &&
+   (bv_unsigned (m_nofile m) <=? 2 ^ 31 - 64)%Z)%bool.
+
+Definition rlim64_nofile_wf (bs : list byte) (m : Model) : bool :=
+  (Nat.eqb (length bs) 16
+   && stat_bytes_eqb (firstn 8 bs) (word_le8 (m_nofile m))
+   && (bv_unsigned (m_nofile m) <=? bv_unsigned (rlim64_hard bs))%Z
+   && (bv_unsigned (rlim64_hard bs) <=? 2 ^ 31 - 64)%Z)%bool.
+
+Definition prlimit64_nofile_read_spec (pid new_rlim old_rlim : word)
+    : Sys SyscallEffect :=
+  if negb (w_is0 pid) then unmodeled
+  else if negb (w_is0 new_rlim) then unmodeled
+  else if w_is0 old_rlim then unmodeled
+  else
+    i <- input ;;
+    m <- get_model ;;
+    if negb (rlim64_nofile_ready_b m) then unmodeled
+    else
+    match read_bytes_map (in_wmem i) old_rlim (Z_to_bv 64 16) with
+    | None =>
+        if negb (access_okb old_rlim 16) then err_ret EFAULT
+        else unmodeled
+    | Some _ =>
+        match m_rlimit_nofile m with
+        | Some bs => pure (mkEffect (Z_to_bv 64 0) [(old_rlim, bs)] [])
+        | None =>
+            bs <- choose (fun bs : list byte => rlim64_nofile_wf bs m = true) ;;
+            set_rlimit_nofile bs ;;
+            pure (mkEffect (Z_to_bv 64 0) [(old_rlim, bs)] [])
+        end
+    end.
+
+(** Go's [syscall] initialization raises the inherited soft NOFILE limit
+    to [hard - 1] if the current soft limit is lower.  The first read pins
+    the inherited pair.  Keeping the hard limit unchanged needs no
+    CAP_SYS_RESOURCE; this model's standing no-LSM assumption applies.
+    The host may lower [fs.nr_open] after the process inherits its hard
+    limit.  Linux then returns -EPERM even for the same-hard update, so
+    both that failure and success are admissible until the host cap is
+    represented in state.  Other valid set shapes are outside this arm. *)
+Definition rlim64_nofile_go_raise_b (bs0 nb : list byte) (m : Model) : bool :=
+  (rlim64_nofile_wf bs0 m
+   && bv_eqb (rlim64_hard nb) (rlim64_hard bs0)
+   && (bv_unsigned (rlim64_soft nb) =?
+       bv_unsigned (rlim64_hard bs0) - 1)%Z
+   && (bv_unsigned (m_nofile m) <?
+       bv_unsigned (rlim64_soft nb))%Z)%bool.
+
+Definition prlimit64_nofile_set_spec (pid new_rlim old_rlim : word)
+    : Sys SyscallEffect :=
+  if negb (w_is0 pid) then unmodeled
+  else if w_is0 new_rlim then unmodeled
+  else if negb (w_is0 old_rlim) then unmodeled
+  else
+    i <- input ;;
+    m <- get_model ;;
+    if negb (rlim64_nofile_ready_b m) then unmodeled
+    else
+    match m_rlimit_nofile m with
+    | None => unmodeled
+    | Some bs0 =>
+        match read_bytes_map (in_mem i) new_rlim (Z_to_bv 64 16) with
+        | None =>
+            if negb (access_okb new_rlim 16) then err_ret EFAULT
+            else unmodeled
+        | Some nb =>
+            record_copyins [(new_rlim, 16%nat)]
+            (if (bv_unsigned (rlim64_hard nb) <?
+                 bv_unsigned (rlim64_soft nb))%Z
+             then err_ret EINVAL
+             else if negb (rlim64_nofile_go_raise_b bs0 nb m)
+                  then unmodeled
+                  else alt (err_ret EPERM)
+                           (modify (with_nofile_pair (rlim64_soft nb) nb) ;;
+                            ret_only (Z_to_bv 64 0)))
+        end
+    end.
+
+Definition prlimit64_nofile_spec (pid new_rlim old_rlim : word)
+    : Sys SyscallEffect :=
+  if w_is0 new_rlim
+  then prlimit64_nofile_read_spec pid new_rlim old_rlim
+  else prlimit64_nofile_set_spec pid new_rlim old_rlim.
+
+Definition prlimit64_spec (pid resource new_rlim old_rlim : word)
+    : Sys SyscallEffect :=
+  if Z.eqb (bv_unsigned resource) RLIMIT_STACK
+  then prlimit64_stack_spec pid new_rlim old_rlim
+  else if Z.eqb (bv_unsigned resource) RLIMIT_NOFILE
+  then prlimit64_nofile_spec pid new_rlim old_rlim
+  else prlimit64_core_spec pid resource new_rlim old_rlim.
 
 (* =========================================================================
    Credentials — who the process is

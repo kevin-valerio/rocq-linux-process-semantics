@@ -231,9 +231,8 @@ Definition probe_mem : word -> option byte :=
       and is [unmodeled] otherwise, and [mremap_spec] models only
       MREMAP_MAYMOVE.
     - prlimit64 (261) declines the default PID: [Specs.prlimit64_spec]
-      answers only for pid 0 (no other task exists), only for
-      RLIMIT_CORE, and only when exactly one of the two rlimit pointers
-      is NULL — three gates the default registers fail at the first.
+      answers only for pid 0 (no other task exists), and the default
+      registers fail that gate first.
     - clock_gettime (113) declines the default CLOCKID: [a0] is a clock
       id here rather than an fd, and AT_FDCWD truncated to 32 bits is no
       modeled clock, so the arm declines before it reaches an answer.
