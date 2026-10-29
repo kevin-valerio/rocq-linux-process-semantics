@@ -26,6 +26,7 @@ Definition check_fsync (fd : word) (eff : SyscallEffect) (m : Model)
   | Some (FdDevNull _ _) => check_ret_only eff (errno_ret EINVAL) m []
   | Some FdUrandom => check_ret_only eff (errno_ret EINVAL) m []
   | Some (FdProcMaps _) => check_ret_only eff (errno_ret EINVAL) m []
+  | Some (FdHpagePmdSize _) => check_ret_only eff (Z_to_bv 64 0) m []
   | Some (FdFileA _ _) => check_ret_only eff (Z_to_bv 64 0) m []
   | Some (FdFileRW _ _) => check_ret_only eff (Z_to_bv 64 0) m []
   | Some (FdFile _ _)  => check_ret_only eff (Z_to_bv 64 0) m []

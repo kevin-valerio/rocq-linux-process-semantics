@@ -1069,6 +1069,7 @@ Definition check_fstat (i : SyscallInput) (fd statbuf : word)
   | Some (FdDevNull _ _) => check_fstat_devnull i statbuf eff m
   | Some FdUrandom => check_fstat_urandom i statbuf eff m
   | Some (FdProcMaps _) => check_fstat_proc_maps i statbuf eff m
+  | Some (FdHpagePmdSize _) => CheckUnmodeled
   end.
 
 Lemma check_fstat_sound_ok : forall i fd statbuf eff m m' evs,

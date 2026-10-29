@@ -44,6 +44,7 @@ Definition check_getdents64 (fd count : word) (eff : SyscallEffect) (m : Model)
   | Some (FdDevNull _ _) => check_ret_only eff (errno_ret ENOTDIR) m []
   | Some FdUrandom => check_ret_only eff (errno_ret ENOTDIR) m []
   | Some (FdProcMaps _) => check_ret_only eff (errno_ret ENOTDIR) m []
+  | Some (FdHpagePmdSize _) => check_ret_only eff (errno_ret ENOTDIR) m []
   | Some FdDir =>
       if getdents64_no_room count then
         match eff with

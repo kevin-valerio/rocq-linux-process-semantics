@@ -299,6 +299,7 @@ Definition fd_can_poll (e : FdEntry) : option bool :=
          [file_can_poll] is false and [epoll_ctl] ADD is the same
          -EPERM.  Declined until written. *)
   | FdProcMaps _ => None
+  | FdHpagePmdSize _ => None
   end.
 
 (** The complement claim, as a check rather than a sentence.

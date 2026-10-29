@@ -1599,8 +1599,8 @@ Lemma check_read_frame : forall i fd buf count eff m m' evs,
   check_read i fd buf count eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
   intros i fd buf count eff m m' evs H.
-  unfold check_read, check_read_proc_maps, check_read_urandom,
-    check_socket_pending_error,
+  unfold check_read, check_read_proc_maps,
+    check_read_hpage_pmd_size, check_read_urandom, check_socket_pending_error,
     check_access_ok_zero in H.
   cbv zeta in H. vm_frame2 H.
 Qed.
@@ -1644,12 +1644,13 @@ Proof.
     Open.check_openat_sep, Open.check_openat_localtime,
     Open.check_openat_devnull, Open.check_open_devnull,
     Open.check_openat_urandom, Open.check_open_urandom,
-    Open.check_openat_proc_maps,
+    Open.check_openat_proc_maps, Open.check_openat_hpage_pmd_size,
     Open.check_openat_tmp,
     Open.check_openat_read, Open.check_openat_create, Open.check_openat_excl,
     Open.check_openat_dir, Open.check_openat_append,
     Open.check_openat_rdwr, Open.check_openat_rdwr_excl,
-    check_create_wronly, check_open_append, check_open_rdwr in H.
+    check_create_wronly, check_open_append, check_open_rdwr,
+    check_new_fd_result in H.
   vm_frame2 H.
 Qed.
 

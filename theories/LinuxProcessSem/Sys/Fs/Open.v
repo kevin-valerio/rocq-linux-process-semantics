@@ -1069,6 +1069,23 @@ Definition openat_proc_maps_spec (flags : word) (m : Model)
       end
   end.
 
+(** The PMD-size sysfs attribute is present when transparent hugepages
+    are enabled.  Its absence returns -ENOENT; a successful read-only
+    open holds the generated text in a distinct descriptor kind. *)
+Definition openat_hpage_pmd_size_spec (flags : word) (m : Model)
+    : Sys SyscallEffect :=
+  match fs_lookup (m_fs m) hpage_pmd_size_path with
+  | Some _ => unmodeled
+  | None =>
+      if fs_under (m_fs m) hpage_pmd_size_path then unmodeled
+      else if Z.eqb (Z.ldiff (bv_unsigned flags) open_ignored_flags) 0
+      then alt (err_ret ENOENT)
+               (open_result_spec m
+                  (fun fd => with_fds (fd_insert (m_fds m) fd
+                                    (FdHpagePmdSize (Z_to_bv 64 0)))))
+      else unmodeled
+  end.
+
 (** "/tmp/<name>", the run's own PRIVATE temporary directory: the third
     absolute shape this file answers for, and the first that is a
     FILE rather than a device.
@@ -1196,6 +1213,7 @@ Definition openat_sep_spec (p : path) (flags : word) (m : Model)
   else if path_eqb p devnull_path then openat_devnull_spec flags m
   else if path_eqb p urandom_path then openat_urandom_spec flags m
   else if path_eqb p proc_self_maps_path then openat_proc_maps_spec flags m
+  else if path_eqb p hpage_pmd_size_path then openat_hpage_pmd_size_spec flags m
   else match tmp_name p with
        | Some n => openat_tmp_spec n p flags m
        | None => unmodeled
@@ -1643,6 +1661,7 @@ Definition ftruncate_spec (fd len : word) : Sys SyscallEffect :=
                                                     is the same -EINVAL, tested before FMODE_WRITE *)
   | Some (FdFile _ _) => err_ret EINVAL          (* fd open read-only: no FMODE_WRITE, real -EINVAL *)
   | Some (FdProcMaps _) => err_ret EINVAL
+  | Some (FdHpagePmdSize _) => unmodeled
   | Some FdDir => err_ret EINVAL                 (* a directory is not S_ISREG: real -EINVAL, not -EISDIR *)
   | Some (FdFileA p _) =>
       (* AN APPEND FD IS A WRITABLE REGULAR FILE, so it takes the arm

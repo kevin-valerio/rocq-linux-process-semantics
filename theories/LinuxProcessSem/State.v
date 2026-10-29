@@ -2673,7 +2673,8 @@ Inductive FdEntry :=
   | FdPipe (id : word) (writer : bool)
   | FdDevNull (rd wr : bool)
   | FdUrandom
-  | FdProcMaps (offset : word).
+  | FdProcMaps (offset : word)
+  | FdHpagePmdSize (offset : word).
 
 (** Virtual-memory bookkeeping: a ledger of allocator decisions the model
     has already committed to (the flat byte-map memory can't encode
@@ -4310,6 +4311,7 @@ Fixpoint pipe_end_live (fds : list (word * FdEntry)) (id : word)
   | (_, FdDevNull _ _) :: r => pipe_end_live r id writer
   | (_, FdUrandom) :: r => pipe_end_live r id writer
   | (_, FdProcMaps _) :: r => pipe_end_live r id writer
+  | (_, FdHpagePmdSize _) :: r => pipe_end_live r id writer
   end.
 
 (** A 32-bit value as the four little-endian bytes the kernel's

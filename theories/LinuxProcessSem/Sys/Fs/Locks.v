@@ -88,6 +88,7 @@ Fixpoint path_openers (fds : list (word * FdEntry)) (p : path) : nat :=
   | (_, FdDevNull _ _) :: r => path_openers r p   (* a device node is not a key of [Fs.Fs] *)
   | (_, FdUrandom) :: r => path_openers r p       (* nor is this one *)
   | (_, FdProcMaps _) :: r => path_openers r p
+  | (_, FdHpagePmdSize _) :: r => path_openers r p
   end.
 
 (** Exactly one descriptor names [p].  Applied to a path just resolved
@@ -322,5 +323,6 @@ Definition flock_spec (fd cmd : word) : Sys SyscallEffect :=
               (* FAIL-CLOSED, for the /dev/null reason: one inode, so
                  an [FdUrandom] count would be needed.  Not written. *)
           | FdProcMaps _ => unmodeled
+          | FdHpagePmdSize _ => unmodeled
           end
     end.

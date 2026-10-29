@@ -55,6 +55,7 @@ Definition check_flock (fd cmd : word) (eff : SyscallEffect) (m : Model)
           | FdDevNull _ _ => CheckUnmodeled
           | FdUrandom => CheckUnmodeled
           | FdProcMaps _ => CheckUnmodeled
+          | FdHpagePmdSize _ => CheckUnmodeled
           end
     end.
 
@@ -82,7 +83,7 @@ Proof.
   { apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
     eapply bind_ok0; [apply get_model_ok|]. cbv beta iota.
     srw Hfd. apply pure_ok. }
-  destruct e as [c|p off|p off|p off|p off| |sk|id w|rd wr| |maps_off]; try discriminate;
+  destruct e as [c|p off|p off|p off|p off| |sk|id w|rd wr| |maps_off|hpage_off]; try discriminate;
     destruct (flock_sole_opener (m_fds m) p) eqn:Hsole; try discriminate;
     apply check_ret_only_ok_iff in H; destruct H as (-> & -> & ->);
     (eapply bind_ok0; [apply get_model_ok|]); cbv beta iota;
@@ -102,7 +103,7 @@ Proof.
     [|now apply check_ret_only_no_unmodeled in H].
   destruct (flock_unlock_b cmd) eqn:Hun;
     [now apply check_ret_only_no_unmodeled in H|].
-  destruct e as [c|p off|p off|p off|p off| |sk|id w|rd wr| |maps_off].
+  destruct e as [c|p off|p off|p off|p off| |sk|id w|rd wr| |maps_off|hpage_off].
   - eapply bind_unmodeled2; [apply get_model_ok|]. cbv beta iota.
     srw Hfd. apply unmodeled_intro.
   - destruct (flock_sole_opener (m_fds m) p) eqn:Hsole;
@@ -136,6 +137,9 @@ Proof.
   - (* /proc/self/maps: declined *)
     eapply bind_unmodeled2; [apply get_model_ok|]. cbv beta iota.
     srw Hfd. apply unmodeled_intro.
+  - (* sysfs attribute: declined *)
+    eapply bind_unmodeled2; [apply get_model_ok|]. cbv beta iota.
+    srw Hfd. apply unmodeled_intro.
 Qed.
 
 Lemma check_flock_complete_ok : forall fd cmd eff m m' evs i,
@@ -148,7 +152,7 @@ Proof.
     try (destruct (negb (flock_cmd_ok_b cmd)) eqn:Hok; hall Hok; inv_ok;
          try (destruct (fd_lookup (m_fds m) fd) as [e|] eqn:Hfd; hall Hfd; inv_ok;
               try (destruct (flock_unlock_b cmd) eqn:Hun; hall Hun; inv_ok;
-                   try (destruct e as [c|p off|p off|p off|p off| |sk|id w|rd wr| |maps_off]; hall Hfd; inv_ok;
+                   try (destruct e as [c|p off|p off|p off|p off| |sk|id w|rd wr| |maps_off|hpage_off]; hall Hfd; inv_ok;
                         try (destruct (flock_sole_opener (m_fds m) p) eqn:Hsole;
                              hall Hsole; inv_ok)))));
     cbn; try rewrite bv_eqb_refl; try rewrite Z.eqb_refl; reflexivity.
@@ -164,7 +168,7 @@ Proof.
     try (destruct (negb (flock_cmd_ok_b cmd)) eqn:Hok; hall Hok; inv_ok;
          try (destruct (fd_lookup (m_fds m) fd) as [e|] eqn:Hfd; hall Hfd; inv_ok;
               try (destruct (flock_unlock_b cmd) eqn:Hun; hall Hun; inv_ok;
-                   try (destruct e as [c|p off|p off|p off|p off| |sk|id w|rd wr| |maps_off]; hall Hfd; inv_ok;
+                   try (destruct e as [c|p off|p off|p off|p off| |sk|id w|rd wr| |maps_off|hpage_off]; hall Hfd; inv_ok;
                         try (destruct (flock_sole_opener (m_fds m) p) eqn:Hsole;
                              hall Hsole; inv_ok)))));
     reflexivity.

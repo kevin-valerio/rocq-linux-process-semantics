@@ -41,6 +41,17 @@ Example fsync_proc_maps_is_einval :
        (mkEffect 0 [] []) m = CheckReject.
 Proof. vm_compute. repeat split; reflexivity. Qed.
 
+Example fsync_hpage_pmd_size_succeeds :
+  let m := with_fds (fd_insert (m_fds fsync_model) 6
+                     (FdHpagePmdSize 0)) fsync_model in
+  check_syscall
+    (mkInput 82 [6; 0; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
+    (mkEffect 0 [] []) m = CheckOk m []
+  /\ check_syscall
+       (mkInput 82 [6; 0; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
+       (mkEffect (errno_ret EINVAL) [] []) m = CheckReject.
+Proof. split; check_eq. Qed.
+
 (** THE CHANNEL ARM ON fd 0.
 
     The second conjunct is what makes the first non-vacuous: a kernel

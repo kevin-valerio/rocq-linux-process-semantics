@@ -153,6 +153,7 @@ Definition dup_modeled_entry (e : FdEntry) : bool :=
      entry loses nothing. *)
   | FdUrandom => true
   | FdProcMaps _ => false  (* the open description carries a shared offset *)
+  | FdHpagePmdSize _ => false
   end.
 
 (** dup's injectable failures: fd-table exhaustion at RLIMIT_NOFILE

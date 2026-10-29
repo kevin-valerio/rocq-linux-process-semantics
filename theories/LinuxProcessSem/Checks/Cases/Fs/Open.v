@@ -45,6 +45,34 @@ Example openat_proc_self_maps_read_only :
        proc_maps_open_model = CheckUnmodeled.
 Proof. split; check_eq. Qed.
 
+Definition hpage_open_model : Model :=
+  init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof).
+
+Definition hpage_open_input (flags : word) : SyscallInput :=
+  mkInput 56 [AT_FDCWD; 0x2000; flags; 0; 0; 0]
+    (fun a =>
+       if (bv_leu 0x2000 a && bv_ltu a 0x2033)%bool
+       then Some (nth (Z.to_nat (bv_unsigned a - 8192))
+                      (hpage_pmd_size_path ++ [0]) 0)
+       else None)
+    (fun _ => None).
+
+Example openat_hpage_pmd_size_read_only :
+  check_syscall (hpage_open_input (Z_to_bv 64 O_CLOEXEC))
+    (with_copyins [(0x2000, 51%nat)] (mkEffect 3 [] []))
+    hpage_open_model
+  = CheckOk
+      (with_fds (fd_insert (m_fds hpage_open_model) 3
+                   (FdHpagePmdSize 0)) hpage_open_model) []
+  /\ check_syscall (hpage_open_input (Z_to_bv 64 O_CLOEXEC))
+       (with_copyins [(0x2000, 51%nat)]
+          (mkEffect (errno_ret ENOENT) [] []))
+       hpage_open_model = CheckOk hpage_open_model []
+  /\ check_syscall (hpage_open_input (Z_to_bv 64 O_WRONLY))
+       (with_copyins [(0x2000, 51%nat)] (mkEffect 3 [] []))
+       hpage_open_model = CheckUnmodeled.
+Proof. repeat split; check_eq. Qed.
+
 Example openat_live_dirfd_still_unmodeled :
   check_syscall
     (mkInput 56 [1; 8192; 0; 0; 0; 0]

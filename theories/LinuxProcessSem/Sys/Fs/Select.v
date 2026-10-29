@@ -406,6 +406,7 @@ Fixpoint bits_all_pollable (fds : list (word * FdEntry)) (z : Z) (k : nat)
                answer is [DEFAULT_POLLMASK] and would be [true].  Not
                written; declined. *)
             | Some (FdProcMaps _) => false
+            | Some (FdHpagePmdSize _) => false
             end
        else true)
       && bits_all_pollable fds z k'
@@ -895,6 +896,7 @@ Definition ppoll_revents_of (fds : list (word * FdEntry)) (fd events : Z)
        | Some FdUrandom => None
            (* the same: [urandom_fops] has no [.poll] either *)
        | Some (FdProcMaps _) => None
+       | Some (FdHpagePmdSize _) => None
        end.
 
 Fixpoint ppoll_revents (fds : list (word * FdEntry)) (es : list (Z * Z))
