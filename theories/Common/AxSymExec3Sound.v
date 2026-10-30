@@ -3447,6 +3447,98 @@ Proof.
     + cbn [map]. rewrite Hmap. cbn [map] in Hb8'. injection Hb8' as Hb8''. rewrite Hb8''. reflexivity.
 Qed.
 
+Lemma log_base_byte_lit_sound : forall E base kn log rb rk b,
+  know_ok segs E base kn -> log_flat E log ->
+  log_base_byte_lit segs kn log rb rk = Some b ->
+  flat E (SA rb rk) 1 ->
+  rdn segs (mem_denot E base log) (adenot E (SA rb rk)) 1 =
+    Some [Z_to_bv 8 b] /\ (0 <= b < 256)%Z.
+Proof.
+  intros E base kn log. induction log as [|[[kb kk] w v] rest IH];
+    intros rb rk b Hkn Hlf H Hfr.
+  - cbn [log_base_byte_lit mem_denot] in H.
+    exact (know_byte_lit_sound E base kn rb rk b Hkn H Hfr).
+  - cbn [log_flat] in Hlf. destruct Hlf as (Hw8 & Hfk & Hlf').
+    cbn [log_base_byte_lit] in H. cbn [mem_denot].
+    destruct (rel_lit rb rk 1 kb kk (Z.of_nat w)) as [d| | |]
+      eqn:Hrel; try discriminate.
+    + destruct (rel_lit_inside E _ _ _ _ _ _ _ Hrel)
+        as (<- & Hd & Hkk & Hrn & Hst).
+      destruct v as [z| | | | | | |]; try discriminate.
+      injection H as <-.
+      split; [|apply Z.mod_pos_bound; lia].
+      rewrite (rdn_inside_wbytes segs E _ (SA rb kk) w
+        (edenot E (ELit z)) (SA rb rk) 1 d Hfk Hfr Hst) by lia.
+      rewrite word_byte_at by lia. cbn [edenot].
+      rewrite u_lit64. reflexivity.
+    + destruct (rel_lit_disjoint E _ _ _ _ _ _ Hrel) as [<- Hdis].
+      destruct (IH rb rk b Hkn Hlf' H Hfr) as [IH1 IH2].
+      split; [|exact IH2].
+      rewrite rdn_wbytes_out;
+        [exact IH1
+        | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk),
+            (flat_u E _ _ Hfr); exact Hdis
+        | rewrite (flat_u E _ _ Hfr);
+          destruct Hfr as (?&?&?&?); cbn [Z.of_nat]; lia
+        | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk);
+          destruct Hfk as (?&?&?&?); lia].
+    + destruct (ranges_apart (facts_of kn) rb rk 1 kb kk (Z.of_nat w))
+        eqn:Hapart; [|discriminate].
+      pose proof (ranges_apart_sound segs E base (facts_of kn)
+        rb rk 1 kb kk (Z.of_nat w)
+        (facts_of_ok segs E base kn Hkn) Hapart) as Hdis.
+      destruct (IH rb rk b Hkn Hlf' H Hfr) as [IH1 IH2].
+      split; [|exact IH2].
+      rewrite rdn_wbytes_out;
+        [exact IH1
+        | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk),
+            (flat_u E _ _ Hfr); exact Hdis
+        | rewrite (flat_u E _ _ Hfr);
+          destruct Hfr as (?&?&?&?); cbn [Z.of_nat]; lia
+        | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk);
+          destruct Hfk as (?&?&?&?); lia].
+Qed.
+
+Lemma log_base_bytes_lit_sound : forall E base kn log rb n rk zs,
+  know_ok segs E base kn -> log_flat E log ->
+  log_base_bytes_lit segs kn log rb rk n = Some zs ->
+  flat E (SA rb rk) (Z.of_nat n) ->
+  exists bs, rdn segs (mem_denot E base log)
+      (adenot E (SA rb rk)) n = Some bs /\ map bv_unsigned bs = zs.
+Proof.
+  intros E base kn log rb n. induction n as [|n IH];
+    intros rk zs Hkn Hlf H Hfr.
+  - cbn in H. injection H as <-. exists []. split; reflexivity.
+  - cbn [log_base_bytes_lit] in H.
+    destruct (log_base_byte_lit segs kn log rb rk) as [b|] eqn:Hb;
+      [|discriminate].
+    destruct (log_base_bytes_lit segs kn log rb (rk + 1) n)
+      as [r|] eqn:Hr; [|discriminate].
+    injection H as <-.
+    assert (Hf1 : flat E (SA rb rk) 1)
+      by (unfold flat, estart in *; cbn [a_base a_off] in *; lia).
+    destruct (log_base_byte_lit_sound E base kn log rb rk b
+      Hkn Hlf Hb Hf1) as [H1 Hb8].
+    assert (Hb8' : map bv_unsigned [Z_to_bv 8 b] = [b]).
+    { cbn [map]. f_equal. rewrite Z_to_bv_unsigned.
+      apply bv_wrap_small. change (bv_modulus 8) with 256%Z. lia. }
+    destruct n as [|n'].
+    { cbn in Hr. injection Hr as <-. exists [Z_to_bv 8 b].
+      split; [exact H1 | exact Hb8']. }
+    assert (Hfn : flat E (SA rb (rk + 1)) (Z.of_nat (S n')))
+      by (unfold flat, estart in *; cbn [a_base a_off] in *; lia).
+    destruct (IH (rk + 1)%Z r Hkn Hlf Hr Hfn) as (bs' & Hn & Hmap).
+    exists (Z_to_bv 8 b :: bs'). split.
+    + apply rdn_cons1; [exact H1|].
+      replace (adenot E (SA rb rk) + 1)
+        with (adenot E (SA rb (rk + 1))); [exact Hn|].
+      unfold adenot, v_addi. cbn [a_base a_off].
+      rewrite w_add_1, Z_to_bv_unsigned, Z_to_bv64_wrap_l.
+      f_equal. lia.
+    + cbn [map]. rewrite Hmap. cbn [map] in Hb8'.
+      injection Hb8' as Hb8''. rewrite Hb8''. reflexivity.
+Qed.
+
 Lemma know_lookupA_sound : forall E M0 allkn base kn rb rk n sx hints acc,
   know_ok segs E M0 allkn ->
   know_ok segs E base kn -> (1 <= n)%nat -> (n <= 8)%nat ->
@@ -5156,7 +5248,7 @@ Proof.
   unfold sym_read in Hs.
   pose proof (log_lookup_sound segs E base fk (s_log ss) (a_base a) (a_off a) n sx' (sc_hints scr) [] Hfk Hlf Hn1 Hn8) as HL.
   destruct (log_lookup fk (s_log ss) (a_base a) (a_off a) n sx' (sc_hints scr) []) as [v0 lscs lh|lscs lh|] eqn:Hll;
-    [ | | discriminate].
+    [ | | ].
   - (* log hit *)
     injection Hs as <- <- <- <-.
     apply (flat_sc_sound segs E base fk _ _ _ Hfk Hn1 Hn8) in Hsc as [Hfl Hsc].
@@ -5190,6 +5282,23 @@ Proof.
       assert (Hrd' : rdn segs mem (adenot E a) n = Some bs).
       { destruct a; cbn [a_base a_off] in *. unfold mem. rewrite (HL Hlscs Hfl). exact Hrd. }
       exists bs. split; [exact Hrd'|]. split; [exact (rdn_length _ _ _ _ _ Hrd')|]. exact Hval.
+  - (* partial log read with literal base bytes *)
+    destruct (log_base_bytes_lit segs (s_know ss) (s_log ss)
+      (a_base a) (a_off a) n) as [zs|] eqn:Hmix;
+      [|discriminate].
+    injection Hs as <- <- <- <-.
+    replace (flat_sc fk a n) with (flat_sc fk a n ++ []) in Hsc
+      by apply app_nil_r.
+    apply (flat_sc_sound segs E base fk _ _ _ Hfk Hn1 Hn8)
+      in Hsc as [Hfl _].
+    split; [exact Hfl|].
+    destruct (log_base_bytes_lit_sound segs E base (s_know ss) (s_log ss)
+      (a_base a) n (a_off a) zs Hkn Hlf Hmix
+      ltac:(destruct a; exact Hfl)) as (bs & Hrd & Hmap).
+    exists bs. split; [destruct a; exact Hrd|].
+    split; [exact (rdn_length _ _ _ _ _ Hrd)|].
+    cbn [edenot]. unfold lit_of_bytes. rewrite <- Hmap, zbytes_map.
+    unfold extz. reflexivity.
 Qed.
 
 (** Writability of [n] bytes at [a] (in the BASE memory) from [storeok_sc]. *)

@@ -1996,6 +1996,38 @@ Fixpoint know_bytes_lit (segs : list Segment) (kn : list kentry) (rb : expr) (rk
             end
   end.
 
+(** Compose a literal read from the newest definite log byte, or from
+    literal base knowledge when no logged store covers that byte. *)
+Fixpoint log_base_byte_lit (segs : list Segment) (kn : list kentry)
+    (log : list sentry) (rb : expr) (rk : Z) : option Z :=
+  match log with
+  | [] => know_byte_lit segs kn rb rk
+  | SE (SA kb kk) w v :: rest =>
+      match rel_lit rb rk 1 kb kk (Z.of_nat w) with
+      | RInside d => match v with
+                     | ELit z => Some (((z mod two64) / 2 ^ (8 * d)) mod 256)%Z
+                     | _ => None
+                     end
+      | RDisjoint => log_base_byte_lit segs kn rest rb rk
+      | RUnknown =>
+          if ranges_apart (facts_of kn) rb rk 1 kb kk (Z.of_nat w)
+          then log_base_byte_lit segs kn rest rb rk else None
+      | RPartial => None
+      end
+  end.
+
+Fixpoint log_base_bytes_lit (segs : list Segment) (kn : list kentry)
+    (log : list sentry) (rb : expr) (rk : Z) (n : nat) : option (list Z) :=
+  match n with
+  | O => Some []
+  | S n' =>
+      match log_base_byte_lit segs kn log rb rk,
+            log_base_bytes_lit segs kn log rb (rk + 1) n' with
+      | Some b, Some r => Some (b :: r)
+      | _, _ => None
+      end
+  end.
+
 (** Consult the knowledge list (order = priority).  For entries with a
     symbolic extent or a different base the hint script decides whether
     to CLAIM coverage ([true]: emit [SCInside]) or pass ([false]/none).
@@ -2942,7 +2974,12 @@ Definition sym_read (segs : list Segment) (ss : sym_state) (fk : list kentry) (s
            (a : saddr) (n : nat) (sx' : bool)
   : option (expr * list sidecond * scripts * nat) :=
   match log_lookup fk (s_log ss) (a_base a) (a_off a) n sx' (sc_hints scr) [] with
-  | LStuck => None
+  | LStuck =>
+      match log_base_bytes_lit segs (s_know ss) (s_log ss)
+        (a_base a) (a_off a) n with
+      | Some bs => Some (lit_of_bytes sx' n bs, flat_sc fk a n, scr, s_next ss)
+      | None => None
+      end
   | LHit v scs hints =>
       Some (extK fk v, flat_sc fk a n ++ scs, SCR (sc_dirs scr) (sc_reads scr) hints, s_next ss)
   | LMiss scs hints =>

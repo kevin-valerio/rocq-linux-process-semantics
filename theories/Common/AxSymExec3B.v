@@ -1515,7 +1515,12 @@ Definition sym_readB (segs : list Segment) (ss : sym_state) (bc : bctx) (scr : s
            (a : saddr) (n : nat) (sx' : bool)
   : option (expr * list sidecond * scripts * nat) :=
   match log_lookupB bc (s_log ss) (a_base a) (a_off a) n sx' (sc_hints scr) [] with
-  | LStuck => None
+  | LStuck =>
+      match log_base_bytes_lit segs (s_know ss) (s_log ss)
+        (a_base a) (a_off a) n with
+      | Some bs => Some (lit_of_bytes sx' n bs, flat_scB bc a n, scr, s_next ss)
+      | None => None
+      end
   | LHit v scs hints =>
       Some (extKB bc v, flat_scB bc a n ++ scs, SCR (sc_dirs scr) (sc_reads scr) hints, s_next ss)
   | LMiss scs hints =>
@@ -2066,7 +2071,12 @@ Definition sym_readBI (segs : list Segment) (ss : sym_state) (bc : bctx) (kx : k
            (a : saddr) (n : nat) (sx' : bool)
   : option (expr * list sidecond * scripts * nat) :=
   match log_lookupB bc (s_log ss) (a_base a) (a_off a) n sx' (sc_hints scr) [] with
-  | LStuck => None
+  | LStuck =>
+      match log_base_bytes_lit segs (s_know ss) (s_log ss)
+        (a_base a) (a_off a) n with
+      | Some bs => Some (lit_of_bytes sx' n bs, flat_scB bc a n, scr, s_next ss)
+      | None => None
+      end
   | LHit v scs hints =>
       Some (extKB bc v, flat_scB bc a n ++ scs, SCR (sc_dirs scr) (sc_reads scr) hints, s_next ss)
   | LMiss scs hints =>
