@@ -23,8 +23,10 @@ Open Scope sys_scope.
     QEMU user mode recognizes that path and copies its [exec_path].
     Both can return a nonempty prefix without a terminating NUL.  The
     target can change if another process renames the executable, so each
-    call chooses its bytes independently.  Procfs can answer -ENOENT if
-    the task has no executable file, so that outcome is also admitted.
+    call chooses its bytes independently.  This scope covers executable
+    paths whose [d_path] result begins with '/'.  Filesystems that supply
+    another [d_dname] result are outside this scope.  Procfs can answer
+    -ENOENT if the task has no executable file, so that outcome is admitted.
     The model covers this path when the whole output buffer is writable
     and its size is 1..PATH_MAX.
     The pathname read is charged for every answered result.  Other
@@ -35,7 +37,10 @@ Definition proc_self_exe_path : path :=
      108%Z;102%Z;47%Z;101%Z;120%Z;101%Z].
 
 Definition exe_link_bytes_ok (bufsiz : word) (bs : list byte) : bool :=
-  negb (Nat.eqb (length bs) 0)
+  (match bs with
+   | [] => false
+   | first :: _ => bv_eqb first (Z_to_bv 8 47)
+   end)
   && Z.leb (Z.of_nat (length bs)) (bv_unsigned bufsiz)
   && forallb (fun b => negb (bv_eqb b (Z_to_bv 8 0))) bs.
 
