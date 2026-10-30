@@ -1865,10 +1865,34 @@ Fixpoint log_bytes_lit (log : list sentry) (rb : expr) (rk : Z) (n : nat) : opti
             end
   end.
 
+(** A byte from the newest definite same-base store, including symbolic
+    store values.  Unknown aliasing still stops composition. *)
+Fixpoint log_byte_expr (log : list sentry) (rb : expr) (rk : Z) : option expr :=
+  match log with
+  | [] => None
+  | SE (SA kb kk) w v :: rest =>
+      match rel_lit rb rk 1 kb kk (Z.of_nat w) with
+      | RInside d => Some (mkExt false (Z.to_nat d) 1 v)
+      | RDisjoint => log_byte_expr rest rb rk
+      | _ => None
+      end
+  end.
+
+Fixpoint log_bytes_expr (log : list sentry) (rb : expr) (rk : Z) (n : nat) : option expr :=
+  match n with
+  | O => Some (ELit 0)
+  | S n' =>
+      match log_byte_expr log rb rk, log_bytes_expr log rb (rk + 1) n' with
+      | Some b, Some rest =>
+          Some (EAlu ALU_OR b (EAlu ALU_SLL rest (ELit 8)))
+      | _, _ => None
+      end
+  end.
+
 (** Walk the store log (newest first).  Same base: decide by offsets
     (hit inside one entry, skip if disjoint; a read PARTIALLY overlapping
-    an entry is composed bytewise from literal entries of the log
-    ([log_bytes_lit]), else stuck).  Other
+    an entry is composed bytewise from definite same-base entries of
+    the log.  Other
     base: consume a hint — [true] (or no hint) = assume disjoint (emit
     [SCDisj]), [false] = stuck (aliasing through a different spelling is
     not modelled: pin the register to the canonical spelling instead). *)
@@ -1880,10 +1904,15 @@ Fixpoint log_lookup (kn : list kentry) (log : list sentry) (rb : expr) (rk : Z) 
       match rel_lit rb rk (Z.of_nat n) kb kk (Z.of_nat w) with
       | RInside d => LHit (mkExt sx (Z.to_nat d) n v) acc hints
       | RDisjoint => log_lookup kn rest rb rk n sx hints acc
-      | RPartial => match log_bytes_lit log rb rk n with
-                    | Some bs => LHit (lit_of_bytes sx n bs) acc hints
-                    | None => LStuck
-                    end
+      | RPartial =>
+          match log_bytes_lit log rb rk n with
+          | Some bs => LHit (lit_of_bytes sx n bs) acc hints
+          | None =>
+              match log_bytes_expr log rb rk n with
+              | Some e => LHit (mkExt sx 0 n e) acc hints
+              | None => LStuck
+              end
+          end
       | RUnknown =>
           if ranges_apart kn rb rk (Z.of_nat n) kb kk (Z.of_nat w)
           then log_lookup kn rest rb rk n sx hints acc

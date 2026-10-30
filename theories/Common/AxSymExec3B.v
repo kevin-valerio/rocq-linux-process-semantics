@@ -1374,7 +1374,11 @@ Fixpoint log_lookupB (bc : bctx) (log : list sentry) (rb : expr) (rk : Z) (n : n
       | RDisjoint => log_lookupB bc rest rb rk n sx hints acc
       | RPartial => match log_bytes_lit log rb rk n with
                     | Some bs => LHit (lit_of_bytes sx n bs) acc hints
-                    | None => LStuck
+                    | None =>
+                        match log_bytes_expr log rb rk n with
+                        | Some e => LHit (mkExt sx 0 n e) acc hints
+                        | None => LStuck
+                        end
                     end
       | RUnknown =>
           if ranges_apartB bc rb rk (Z.of_nat n) kb kk (Z.of_nat w)
