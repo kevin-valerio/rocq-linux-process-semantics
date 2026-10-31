@@ -25,6 +25,8 @@ Definition check_fsync (fd : word) (eff : SyscallEffect) (m : Model)
   | Some (FdPipe _ _)  => check_ret_only eff (errno_ret EINVAL) m []
   | Some (FdDevNull _ _) => check_ret_only eff (errno_ret EINVAL) m []
   | Some FdUrandom => check_ret_only eff (errno_ret EINVAL) m []
+  | Some (FdProcMaps _) => check_ret_only eff (errno_ret EINVAL) m []
+  | Some (FdHpagePmdSize _) => check_ret_only eff (Z_to_bv 64 0) m []
   | Some (FdFileA _ _) => check_ret_only eff (Z_to_bv 64 0) m []
   | Some (FdFileRW _ _) => check_ret_only eff (Z_to_bv 64 0) m []
   | Some (FdFile _ _)  => check_ret_only eff (Z_to_bv 64 0) m []
@@ -67,8 +69,7 @@ Proof.
     cbn; try rewrite bv_eqb_refl; try rewrite Z.eqb_refl; reflexivity.
 Qed.
 
-(** Symmetrically, [fsync_spec] has no [unmodeled] arm, so the hypothesis
-    here is contradictory. *)
+(** Every descriptor answers, so an unmodeled outcome is impossible. *)
 
 Lemma check_fsync_complete_unmodeled : forall fd m i eff,
   fsync_spec fd i m Unmodeled -> check_fsync fd eff m = CheckUnmodeled.

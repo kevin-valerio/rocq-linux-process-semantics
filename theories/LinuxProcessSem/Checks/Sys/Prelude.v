@@ -64,9 +64,13 @@ Qed.
 (** Equality for the symbolic pre-effect copy ledger. *)
 
 Definition copy_eqb (c1 c2 : MemCopy) : bool :=
-  bv_eqb (copy_src c1) (copy_src c2)
-  && bv_eqb (copy_dst c1) (copy_dst c2)
-  && bv_eqb (copy_len c1) (copy_len c2).
+  match c1, c2 with
+  | mkCopy s1 d1 n1, mkCopy s2 d2 n2 =>
+      bv_eqb s1 s2 && bv_eqb d1 d2 && bv_eqb n1 n2
+  | mkProtectRO a1 n1, mkProtectRO a2 n2 =>
+      bv_eqb a1 a2 && bv_eqb n1 n2
+  | _, _ => false
+  end.
 
 Fixpoint listCopy_eqb (l1 l2 : list MemCopy) : bool :=
   match l1, l2 with
@@ -77,9 +81,13 @@ Fixpoint listCopy_eqb (l1 l2 : list MemCopy) : bool :=
 
 Lemma copy_eqb_eq : forall c1 c2, copy_eqb c1 c2 = true <-> c1 = c2.
 Proof.
-  intros [s1 d1 n1] [s2 d2 n2]. unfold copy_eqb. cbn.
-  rewrite !Bool.andb_true_iff, !bv_eqb_eq.
-  split; [intros [[-> ->] ->]; reflexivity|intro H; inversion H; auto].
+  intros [s1 d1 n1|a1 n1] [s2 d2 n2|a2 n2];
+    unfold copy_eqb; cbn;
+    try (split; [discriminate|intro H; discriminate H]).
+  - rewrite !Bool.andb_true_iff, !bv_eqb_eq.
+    split; [intros [[-> ->] ->]; reflexivity|intro H; inversion H; auto].
+  - rewrite Bool.andb_true_iff, !bv_eqb_eq.
+    split; [intros [-> ->]; reflexivity|intro H; inversion H; auto].
 Qed.
 
 Lemma listCopy_eqb_eq : forall l1 l2,
@@ -809,7 +817,7 @@ Ltac sys_unfold :=
     err_ret, ret_only, errno_from, lowest_fd,
     set_fds, set_pipes, set_vmmaps, add_vm_lazy, forget_vm_range,
     set_stdin, set_urandom, set_fs, set_halted, set_tid,
-    set_rlimit_core, set_utsname, set_statpin, set_setsid_succeeded, set_clock, set_creds,
+    set_rlimit_core, set_rlimit_stack, set_rlimit_nofile, set_utsname, set_statpin, set_setsid_succeeded, set_clock, set_creds,
     set_sigmask, set_sigaltstack_installed,
     set_sigmask_deliver, set_sigabrt_pending, set_killed,
     get_model, get_fds, get_vmmaps, modify, input, sysno, arg,

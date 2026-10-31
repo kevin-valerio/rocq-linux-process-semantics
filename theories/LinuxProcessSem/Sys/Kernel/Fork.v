@@ -616,6 +616,8 @@ Definition clone_no_shared_file_b (fds : list (word * FdEntry)) : bool :=
   forallb (fun e => match snd e with
                     | FdFile _ _ | FdFileW _ _ | FdFileA _ _
                     | FdFileRW _ _ | FdSocket _ => false
+                    | FdProcMaps _ => false
+                    | FdHpagePmdSize _ => false
                     | FdChannel _ | FdDir => true
                     (* A PIPE END JOINS THE GATE, fail-closed, and it is
                        the one entry here whose shared object is the

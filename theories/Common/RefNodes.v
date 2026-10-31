@@ -455,7 +455,7 @@ Proof. reflexivity. Qed.
 Lemma check_syscall_226 : forall ms x8 eff m,
   bv_unsigned x8 = 226%Z ->
   check_syscall (sys_input segs ms x8) eff m
-  = check_mprotect (ms_gpr ms 0) (ms_gpr ms 1) (ms_gpr ms 2) eff m.
+  = check_mprotect (ms_gpr ms 0) (ms_gpr ms 1) (ms_gpr ms 2) (sys_input segs ms x8) eff m.
 Proof. intros ms x8 eff m Hno. unfold check_syscall. rewrite in_sysno_si, Hno. reflexivity. Qed.
 
 Lemma mprotect_check : forall ms x8 model eff (addr : word) (len : Z),

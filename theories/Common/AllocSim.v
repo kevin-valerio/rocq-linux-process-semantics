@@ -203,7 +203,7 @@ Qed.
 Lemma adv_brk : forall regs pc x8 mem rom r zs,
   advance_past_svc (apply_effect
     {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc; ms_svc_pending := Some x8;
-       ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |} (mkEffect r [] zs))
+       ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |} (mkEffect r [] zs))
   = mkst (regupd regs 10 r) (v_addi pc 4) (apply_zeros mem zs) rom.
 Proof.
   intros regs pc x8 mem rom r zs.

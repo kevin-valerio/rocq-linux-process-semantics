@@ -34,8 +34,8 @@ Definition alignment_state (pc : word) : machine_state := {|
   ms_svc_pending := None;
   ms_resv := None; ms_fcsr := Z_to_bv 32 0;
   ms_mem := fun _ => None;
-  ms_rom := fun _ => None
-|}.
+  ms_rom := fun _ => None;
+  ms_ro := [] |}.
 
 (** Each misaligned range is otherwise a successful instruction-memory
     read.  These checks keep the tests from passing because of a fixture

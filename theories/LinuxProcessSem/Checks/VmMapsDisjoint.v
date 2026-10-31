@@ -1214,26 +1214,32 @@ Proof.
       exact Hwf.
 Qed.
 
-Lemma check_mprotect_preserves : forall addr len prot eff m m' evs,
-  check_mprotect addr len prot eff m = CheckOk m' evs ->
+Lemma check_mprotect_preserves : forall addr len prot i eff m m' evs,
+  check_mprotect addr len prot i eff m = CheckOk m' evs ->
   vm_wf (m_vmmaps m) -> vm_wf (m_vmmaps m').
 Proof.
-  intros addr len prot [ret ws zs us cs ci] m m' evs H Hwf.
+  intros addr len prot i [ret ws zs us cs ci] m m' evs H Hwf.
   unfold check_mprotect in H. cbv zeta in H.
   dif H; [apply check_ret_only_model in H; subst m'; exact Hwf|].
   dif H; [apply check_ret_only_model in H; subst m'; exact Hwf|].
   dif H; [apply check_ret_only_model in H; subst m'; exact Hwf|].
   dif H; [apply check_ret_only_model in H; subst m'; exact Hwf|].
-  dif H; [discriminate|].
   dif H.
-  - destruct ws, us, cs, ci; try discriminate.
-    dif H.
-    + destruct zs; [|discriminate]. injection H as <- <-. exact Hwf.
-    + dif H; [|discriminate]. injection H as <- <-.
-      unfold vm_wf. rewrite vmm_mprotect_next. cbn [vm_maps]. exact Hwf.
   - dif H; [|discriminate].
-    destruct ws, zs, us, cs, ci; try discriminate.
-    dif H; [|discriminate]. injection H as <- <-. exact Hwf.
+    dif H; [|discriminate].
+    destruct ws, zs, us, ci; try discriminate.
+    dif H.
+    + destruct cs; [injection H as <- <-; exact Hwf|discriminate].
+    + dif H; [injection H as <- <-; exact Hwf|discriminate].
+  - dif H.
+    + destruct ws, us, cs, ci; try discriminate.
+      dif H.
+      * destruct zs; [|discriminate]. injection H as <- <-. exact Hwf.
+      * dif H; [|discriminate]. injection H as <- <-.
+        unfold vm_wf. rewrite vmm_mprotect_next. cbn [vm_maps]. exact Hwf.
+    + dif H; [|discriminate].
+      destruct ws, zs, us, cs, ci; try discriminate.
+      dif H; [|discriminate]. injection H as <- <-. exact Hwf.
 Qed.
 
 (** [madvise] never touches [vm_maps]: its one state change is to the
@@ -1246,12 +1252,21 @@ Proof.
   intros addr len advice [ret ws zs us cs ci] m m' evs H.
   unfold check_madvise in H. cbv zeta in H.
   dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
-  dif H; [discriminate|].
-  dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
-  dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
-  dif H; [|discriminate].
-  destruct ws, us, cs, ci; try discriminate.
-  dif H; [|discriminate]. injection H as <- <-. apply vmm_madvise_next.
+  dif H.
+  - unfold check_madvise_nohuge in H.
+    dif H.
+    + unfold check_madvise_nohuge_result in H.
+      dif H; [apply check_ret_only_model in H; subst m'; reflexivity|discriminate].
+    + dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
+      dif H; [|discriminate].
+      unfold check_madvise_nohuge_result in H.
+      dif H; [apply check_ret_only_model in H; subst m'; reflexivity|discriminate].
+  - dif H; [discriminate|].
+    dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
+    dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
+    dif H; [|discriminate].
+    destruct ws, us, cs, ci; try discriminate.
+    dif H; [|discriminate]. injection H as <- <-. apply vmm_madvise_next.
 Qed.
 
 Lemma check_mmap_preserves : forall addr len prot flags fd off eff m m' evs,
@@ -1599,7 +1614,8 @@ Lemma check_read_frame : forall i fd buf count eff m m' evs,
   check_read i fd buf count eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
   intros i fd buf count eff m m' evs H.
-  unfold check_read, check_read_urandom, check_socket_pending_error,
+  unfold check_read, check_read_proc_maps,
+    check_read_hpage_pmd_size, check_read_urandom, check_socket_pending_error,
     check_access_ok_zero in H.
   cbv zeta in H. vm_frame2 H.
 Qed.
@@ -1643,11 +1659,13 @@ Proof.
     Open.check_openat_sep, Open.check_openat_localtime,
     Open.check_openat_devnull, Open.check_open_devnull,
     Open.check_openat_urandom, Open.check_open_urandom,
+    Open.check_openat_proc_maps, Open.check_openat_hpage_pmd_size,
     Open.check_openat_tmp,
     Open.check_openat_read, Open.check_openat_create, Open.check_openat_excl,
     Open.check_openat_dir, Open.check_openat_append,
     Open.check_openat_rdwr, Open.check_openat_rdwr_excl,
-    check_create_wronly, check_open_append, check_open_rdwr in H.
+    check_create_wronly, check_open_append, check_open_rdwr,
+    check_new_fd_result in H.
   vm_frame2 H.
 Qed.
 
@@ -1675,10 +1693,10 @@ Proof.
   unfold check_getrandom, check_getrandom_zero in H. vm_frame2 H.
 Qed.
 
-Lemma check_readlinkat_frame : forall dirfd eff m m' evs,
-  check_readlinkat dirfd eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
+Lemma check_readlinkat_frame : forall i dirfd eff m m' evs,
+  check_readlinkat i dirfd eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
-  intros dirfd eff m m' evs H. unfold check_readlinkat in H. vm_frame2 H.
+  intros i dirfd eff m m' evs H. unfold check_readlinkat in H. vm_frame2 H.
 Qed.
 
 Lemma check_exit_frame : forall code eff m m' evs,
@@ -1825,7 +1843,10 @@ Lemma check_prlimit64_frame :
   m_vmmaps m' = m_vmmaps m.
 Proof.
   intros i pid resource new_rlim old_rlim eff m m' evs H.
-  unfold check_prlimit64, check_rlim64_read in H. vm_frame2 H.
+  unfold check_prlimit64, check_prlimit64_core, check_prlimit64_stack,
+    check_prlimit64_nofile, check_prlimit64_nofile_read,
+    check_prlimit64_nofile_set, check_rlim64_read,
+    check_rlim64_stack_read, check_rlim64_nofile_read in H. vm_frame2 H.
 Qed.
 
 Lemma check_ftruncate_frame : forall fd len eff m m' evs,
@@ -1857,13 +1878,15 @@ Lemma check_setsid_frame : forall eff m m' evs,
   check_setsid eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof. intros eff m m' evs H. unfold check_setsid in H. vm_frame2 H. Qed.
 
-(** [prctl] answers [PR_CAPBSET_READ] out of a constant and declines
-    every other option, so no arm of it touches the model at all: both
-    accepting branches hand back [m] itself. *)
-Lemma check_prctl_frame : forall option_ arg2 eff m m' evs,
-  check_prctl option_ arg2 eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
+(** The capability and VMA name arms leave the mapping ledger alone. *)
+Lemma check_prctl_frame : forall i option_ arg2 eff m m' evs,
+  check_prctl i option_ arg2 eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
-  intros option_ arg2 eff m m' evs H. unfold check_prctl in H. vm_frame2 H.
+  intros i option_ arg2 eff m m' evs H. unfold check_prctl in H.
+  destruct (Z.eqb (bv_unsigned option_) PR_CAPBSET_READ).
+  - vm_frame2 H.
+  - destruct (Z.eqb (bv_unsigned option_) PR_SET_VMA); [|discriminate].
+    unfold check_prctl_vma_name in H. vm_frame2 H.
 Qed.
 
 (** The four clock arms.  [gettimeofday], [clock_gettime], and [clock_getres] hand back
@@ -2087,7 +2110,8 @@ Proof.
   destruct e; try discriminate;
     first [eapply check_fstat_file_frame; exact H
           |eapply check_fstat_devnull_frame; exact H
-          |eapply check_fstat_urandom_frame; exact H].
+          |eapply check_fstat_urandom_frame; exact H
+          |unfold check_fstat_proc_maps in H; vm_frame2 H].
 Qed.
 
 Lemma check_getid_frame : forall sel eff m m' evs,
@@ -2187,12 +2211,22 @@ Proof.
   unfold check_sched_setscheduler in H. vm_frame2 H.
 Qed.
 
-(** sched_getaffinity answers an errno or declines; it never reaches
-    user memory, let alone the mappings. *)
-Lemma check_sched_getaffinity_frame : forall len eff m m' evs,
-  check_sched_getaffinity len eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
+(** sched_getaffinity records the CPU-mask size but preserves mappings. *)
+Lemma check_sched_getaffinity_frame : forall i len eff m m' evs,
+  check_sched_getaffinity i len eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
-  intros len eff m m' evs H. unfold check_sched_getaffinity in H. vm_frame2 H.
+  intros i len eff m m' evs H. unfold check_sched_getaffinity in H. vm_frame2 H.
+  all: unfold affinity_after_success; destruct (m_affinity_size m); reflexivity.
+Qed.
+
+Lemma check_riscv_hwprobe_frame :
+  forall i pairs count cpusetsize cpus flags eff m m' evs,
+  check_riscv_hwprobe i pairs count cpusetsize cpus flags eff m =
+    CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
+Proof.
+  intros i pairs count cpusetsize cpus flags eff m m' evs H.
+  unfold check_riscv_hwprobe, check_hwprobe_response in H.
+  vm_frame2 H.
 Qed.
 
 (** sched_yield answers 0 and hands back the model it was given, so the
@@ -2494,6 +2528,7 @@ Proof.
     | erewrite check_fcntl_frame by eassumption; exact Hwf
     | erewrite check_sched_setscheduler_frame by eassumption; exact Hwf
     | erewrite check_sched_getaffinity_frame by eassumption; exact Hwf
+    | erewrite check_riscv_hwprobe_frame by eassumption; exact Hwf
     | erewrite check_sched_yield_frame by eassumption; exact Hwf
     | erewrite check_sigaltstack_frame by eassumption; exact Hwf
     | erewrite check_rt_sigaction_frame by eassumption; exact Hwf

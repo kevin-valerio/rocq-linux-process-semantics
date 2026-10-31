@@ -617,20 +617,17 @@ Record SyscallInput := mkInput {
 Definition in_arg (i : SyscallInput) (k : nat) : word :=
   nth k (in_args i) (Z_to_bv 64 0).
 
-(** One symbolic memory copy.  Keeping the preserved prefix of a moved
-    anonymous mapping as three words, rather than materializing its bytes,
-    makes large [mremap] effects O(1). *)
-Record MemCopy := mkCopy {
-  copy_src : word;
-  copy_dst : word;
-  copy_len : word;
-}.
+(** Copy a memory range from the pre-effect snapshot, or protect a live
+    range as read-only.  The copy form keeps large [mremap] effects O(1). *)
+Inductive MemCopy : Type :=
+| mkCopy : word -> word -> word -> MemCopy
+| mkProtectRO : word -> word -> MemCopy.
 
 (** What a syscall does to the machine: the a0 return value, the byte
     ranges it writes into user memory, the ranges it ZERO-FILLS
     (anonymous grants, mprotect exposure, and mremap growth), the ranges it
-    UNMAPS (munmap, mremap, and PROT_NONE mappings), and the ranges it copies
-    from a pre-effect snapshot.
+    UNMAPS (munmap, mremap, and PROT_NONE mappings), and memory operations:
+    copies from a pre-effect snapshot or read-only permission changes.
     [Run.apply_effect] applies these deterministically; everything else
     (other GPRs, SP, PC, ROM, all other memory) is preserved by
     construction.
@@ -647,7 +644,7 @@ Record MemCopy := mkCopy {
     [Run.apply_effect] erases the
     ranges before zeros and writes are applied.
 
-    [eff_copies] snapshots its sources from the PRE-EFFECT memory.  This is
+    [eff_copies] snapshots copy sources from the PRE-EFFECT memory.  This is
     essential for a moved [mremap]: the old range is unmapped by the same
     effect, but its preserved prefix must still be installed at the new
     address.  [Run.apply_effect] applies unmaps, then zeros, then these
@@ -661,7 +658,7 @@ Record SyscallEffect := mkEffectU {
   eff_writes : list (word * list byte); (* (base address, bytes), applied in order *)
   eff_zeros  : list (word * word);      (* (base address, size) zero-filled ranges *)
   eff_unmaps : list (word * word);      (* (base address, size) unmapped ranges *)
-  eff_copies : list MemCopy;            (* pre-effect (source, destination, size) copies *)
+  eff_copies : list MemCopy;            (* copies or read-only range changes *)
   eff_copyins : list (word * nat)       (* ranges already read from user memory *)
 }.
 
@@ -2672,7 +2669,9 @@ Inductive FdEntry :=
   | FdSocket (sk : SockState)
   | FdPipe (id : word) (writer : bool)
   | FdDevNull (rd wr : bool)
-  | FdUrandom.
+  | FdUrandom
+  | FdProcMaps (offset : word)
+  | FdHpagePmdSize (offset : word).
 
 (** Virtual-memory bookkeeping: a ledger of allocator decisions the model
     has already committed to (the flat byte-map memory can't encode
@@ -2984,8 +2983,11 @@ Record IoState := mkIoState {
        [Net.Socket.conn_channel] *)
 }.
 
-(** The interpreted file system. *)
-Record FsState := mkFsState { fsst_image : Fs.Fs }.
+(** The interpreted file system and the declared proc maps snapshot. *)
+Record FsState := mkFsState {
+  fsst_image : Fs.Fs;
+  fsst_proc_maps : option (list byte);
+}.
 
 (** The process's UNIX credentials.  Six ids, in the kernel's own
     grouping ([include/linux/cred.h], [struct cred]): the REAL id, which
@@ -3206,8 +3208,8 @@ Record ProcState := mkProcState {
        which two [uname] calls disagree about which kernel is running,
        which no Linux machine produces -- the same argument
        [Sys.Kernel.Sched.Syscalls.sched_getaffinity_spec] makes for the
-       CPU set it declines to answer for, and the note above [Record
-       Model] is where the three mechanisms are compared.
+       CPU-mask size it records, and the note above [Record Model] is
+       where the three mechanisms are compared.
 
        WHY IT IS PROCESS STATE.  Linux keeps it in the UTS NAMESPACE
        ([current->nsproxy->uts_ns->name], include/linux/utsname.h's
@@ -3388,7 +3390,16 @@ Record ProcState := mkProcState {
        KEYED BY PATH, WHICH IS THIS MODEL'S INODE.  Linux keys it by
        inode, and the difference shows only where two paths name one
        inode or one path names two -- neither of which [Fs]'s flat,
-       link-free namespace can express (Fs.v). *)
+       link-free namespace can express (Fs.v). *);
+  procst_affinity_size : option nat
+    (* [cpumask_size()] in bytes, pinned when sched_getaffinity returns
+       eight bytes for a request longer than eight bytes.  That
+       observation reveals the full size; an equal-size request does
+       not.  The current spec models this size only. *);
+  procst_hwprobe : option (word * word)
+    (* The extension and scalar misaligned performance words returned by
+       riscv_hwprobe for all online CPUs.  The launch input fixes them for
+       the run, as it fixes AT_HWCAP.  None leaves this query unmodeled. *)
 }.
 
 (** The resource limits the process has been observed to have. *)
@@ -3407,9 +3418,11 @@ Record LimState := mkLimState {
        never re-encodes one; storing [(soft, hard)] would oblige the spec and
        the checker to agree on a round trip neither otherwise needs.
 
-       [prlimit64] ANSWERS ONLY RLIMIT_CORE, and that is a separate matter
-       from which limits this record carries: [limst_nofile] below is a
-       limit the model KNOWS and [prlimit64] still declines. *);
+       [prlimit64] also reads RLIMIT_STACK and RLIMIT_NOFILE in their
+       scoped arms. *);
+  limst_stack : option (list byte)
+    (* The inherited hard limit is pinned on the first modeled stack
+       read.  The soft limit is the fixed 8 MiB stack size. *);
   limst_nofile : word
     (* RLIMIT_NOFILE's SOFT limit, [rlim_cur], as an [unsigned long] -- the
        width [rlimit()] returns (include/linux/sched/signal.h,
@@ -3417,22 +3430,18 @@ Record LimState := mkLimState {
 
        AN INPUT OF THE RUN, not an observation: unlike [limst_core], which
        is pinned the first time a prlimit64 reads it, this one is seeded by
-       [init_model] from [ProcInput]'s [in_nofile] and never changes.  It
+       [init_model] from [ProcInput]'s [in_nofile].  It
        has to be an input for the same reason the launching uid is one --
        the limits a process starts with are its parent's, so the model does
-       not know them and quantifies over them instead.  It never changes
-       because no syscall in [Specs.modeled_sysnos] writes one: [setrlimit]
-       (164) has no dispatcher arm, and [prlimit64] (261) has one but
-       answers only RLIMIT_CORE.  An arm that answered a NOFILE set would
-       have to make this field mutable, and [Sys.Fs.File.dup3_spec] is
-       where the cost of that would land.
-
-       ONLY THE SOFT LIMIT.  [rlim_max] is not carried because nothing
-       reads it: [ksys_dup3] tests [rlimit(RLIMIT_NOFILE)], which is
-       [rlim_cur], and the one syscall that would report the pair
-       ([prlimit64]) declines this resource.  That decline is therefore
-       load-bearing in both directions -- it is why the hard limit may be
-       absent, and answering it would need the field. *)
+       not know them and quantifies over them instead.  A modeled
+       [prlimit64] set may raise this value after the first NOFILE read.
+       [ksys_dup3] tests the current soft limit.  The inherited hard limit
+       is recorded separately on the first modeled NOFILE read. *);
+  limst_nofile_pair : option (list byte)
+    (* The full pair copied out by a modeled RLIMIT_NOFILE read.  Its soft
+       bytes agree with [limst_nofile]; its hard bytes are inherited and
+       pinned on first observation.  A modeled set replaces both the
+       soft limit and this pair. *)
 }.
 
 (** The clocks the process can read. *)
@@ -3479,11 +3488,9 @@ Record TimeState := mkTimeState {
     ONE record taking opposite answers.  What no field can say, and the
     reason this note exists, is which answer a NEW one should take.
 
-    THE PENDING CASE, named because it is what made this note worth
-    writing: [Sys.Kernel.Sched.Syscalls.sched_getaffinity_spec] declines
-    for want of a CPU set, and wants the SECOND mechanism — its own
-    spec argues why, and is not repeated here.  Naming that is not the
-    same as building it, and it is not built. *)
+    [Sys.Kernel.Sched.Syscalls.sched_getaffinity_spec] uses the second
+    mechanism for the CPU-mask size: a return shorter than the request
+    reveals [cpumask_size()], which later calls must respect. *)
 Record Model := mkModelOf {
   m_fd   : FdState;
   m_vm   : VmState;
@@ -3507,8 +3514,12 @@ Definition m_urandom (m : Model) : InputStream := iost_urandom (m_io m).
 Definition m_net (m : Model) : NetQueue := iost_net (m_io m).
 Definition m_conn_ix (m : Model) : word := iost_conn_ix (m_io m).
 Definition m_fs (m : Model) : Fs.Fs := fsst_image (m_fsys m).
+Definition m_proc_maps (m : Model) : option (list byte) :=
+  fsst_proc_maps (m_fsys m).
 Definition m_halted (m : Model) : option word := procst_halted (m_proc m).
 Definition m_tid (m : Model) : option word := procst_tid (m_proc m).
+Definition m_affinity_size (m : Model) : option nat :=
+  procst_affinity_size (m_proc m).
 Definition m_setsid_succeeded (m : Model) : bool :=
   procst_setsid_succeeded (m_proc m).
 Definition m_has_children (m : Model) : bool := procst_children (m_proc m).
@@ -3529,8 +3540,13 @@ Definition m_utsname (m : Model) : option (list byte) :=
   procst_utsname (m_proc m).
 Definition m_statpins (m : Model) : list (Fs.path * list byte) :=
   procst_statpins (m_proc m).
+Definition m_hwprobe (m : Model) : option (word * word) :=
+  procst_hwprobe (m_proc m).
 Definition m_rlimit_core (m : Model) : option (list byte) := limst_core (m_lim m).
+Definition m_rlimit_stack (m : Model) : option (list byte) := limst_stack (m_lim m).
 Definition m_nofile (m : Model) : word := limst_nofile (m_lim m).
+Definition m_rlimit_nofile (m : Model) : option (list byte) :=
+  limst_nofile_pair (m_lim m).
 Definition m_clock (m : Model) : word := timest_clock (m_time m).
 Definition m_creds (m : Model) : Creds := procst_creds (m_proc m).
 
@@ -3572,12 +3588,12 @@ Definition mkModel (fds : list (word * FdEntry)) (vm : VmMaps)
     (stdin : InputStream) (fs : Fs.Fs) (halted : option word)
     (tid : option word) (rlim : option (list byte)) : Model :=
   mkModelOf (mkFdState fds []) (mkVmState vm [] [])
-            (mkIoState stdin IEof net_silent (Z_to_bv 64 0)) (mkFsState fs)
+            (mkIoState stdin IEof net_silent (Z_to_bv 64 0)) (mkFsState fs None)
             (mkProcState halted tid
                (mkCreds overflow_id overflow_id overflow_id
                         overflow_id overflow_id overflow_id [])
-               false (Z_to_bv 64 0) false None false false false false [])
-            (mkLimState rlim default_nofile)
+               false (Z_to_bv 64 0) false None false false false false [] None None)
+            (mkLimState rlim None default_nofile None)
             (mkTimeState (Z_to_bv 64 0)).
 
 (** Field-update helpers.  Each one rebuilds only its own subsystem and
@@ -3644,15 +3660,19 @@ Definition statpins_restrict (fs : Fs.Fs) (ps : list (Fs.path * list byte))
                    end) ps.
 
 Definition with_fs (fs : Fs.Fs) (m : Model) : Model :=
-  mkModelOf (m_fd m) (m_vm m) (m_io m) (mkFsState fs)
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (mkFsState fs (m_proc_maps m))
             (mkProcState (m_halted m) (m_tid m) (m_creds m)
                          (m_setsid_succeeded m) (m_sigmask m)
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
                          (m_abort_terminal m)
-                         (statpins_restrict fs (m_statpins m)))
+                         (statpins_restrict fs (m_statpins m)) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
+
+Definition with_proc_maps (data : option (list byte)) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m)
+            (mkFsState (m_fs m) data) (m_proc m) (m_lim m) (m_time m).
 (** Halt the process by an EXIT, which is the other half of what the
     kill flag distinguishes: this clears it, so a model this produced has
     [m_killed] [None] whatever it had before.  Nothing can reach it with
@@ -3667,7 +3687,7 @@ Definition with_halted (code : word) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          false (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
 Definition with_tid (tid : word) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
@@ -3676,11 +3696,29 @@ Definition with_tid (tid : word) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+            (m_lim m) (m_time m).
+Definition with_affinity_size (n : nat) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
+            (mkProcState (m_halted m) (m_tid m) (m_creds m)
+                         (m_setsid_succeeded m) (m_sigmask m)
+                         (m_has_children m) (m_utsname m)
+                         (m_sigaltstack_installed m)
+                         (procst_killed (m_proc m)) (m_sigabrt_pending m)
+                         (m_abort_terminal m) (m_statpins m) (Some n) (m_hwprobe m))
             (m_lim m) (m_time m).
 Definition with_rlimit_core (bs : list byte) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
-            (mkLimState (Some bs) (m_nofile m)) (m_time m).
+            (mkLimState (Some bs) (m_rlimit_stack m) (m_nofile m)
+                        (m_rlimit_nofile m)) (m_time m).
+Definition with_rlimit_stack (bs : list byte) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
+            (mkLimState (m_rlimit_core m) (Some bs) (m_nofile m)
+                        (m_rlimit_nofile m)) (m_time m).
+Definition with_rlimit_nofile (bs : list byte) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
+            (mkLimState (m_rlimit_core m) (m_rlimit_stack m) (m_nofile m)
+                        (Some bs)) (m_time m).
 (** Record the UTS name the environment revealed.
     [Kernel.Sys.uname_spec] is the only caller and it calls this only
     on the branch where [m_utsname] was [None], so the pin is written
@@ -3698,7 +3736,7 @@ Definition with_utsname (bs : list byte) (m : Model) : Model :=
                          (m_has_children m) (Some bs)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
 (** Look a file's stat pin up by path.  [None] means no [fstat] has
     delivered a [struct stat] for that file yet, which is the branch
@@ -3734,16 +3772,12 @@ Definition with_statpin (p : Fs.path) (bs : list byte) (m : Model) : Model :=
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
                          (m_abort_terminal m)
-                         ((p, bs) :: m_statpins m))
+                         ((p, bs) :: m_statpins m) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
-(** Seed the soft descriptor limit.  Its only caller is [init_model], for
-    the reason [with_net] gives: the limit is an INPUT of the run, so the
-    one place that may install one is the one that turns a [ProcInput]
-    into a model.  Unlike [with_net], which [with_accepted] later
-    advances past, there is no second writer of any kind — see
-    [limst_nofile] for why there can be none — which is also the
-    difference between this and [with_rlimit_core]. *)
+(** Seed the inherited soft descriptor limit.  [init_model] is the only
+    caller of [with_nofile]; a modeled [prlimit64] set may later change
+    the current limit through [with_nofile_pair]. *)
 (** Seed the task's abort-path declaration.  Its only caller is
     [init_model], for the reason [with_net] and [with_nofile] give: the
     declaration is a parameter of the RUN, so the one place that may
@@ -3760,12 +3794,27 @@ Definition with_abort_terminal (b : bool) (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m) b
-                         (m_statpins m))
+                         (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+            (m_lim m) (m_time m).
+
+(** Install the hardware probe snapshot supplied by [ProcInput]. *)
+Definition with_hwprobe (h : option (word * word)) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
+            (mkProcState (m_halted m) (m_tid m) (m_creds m)
+                         (m_setsid_succeeded m) (m_sigmask m)
+                         (m_has_children m) (m_utsname m)
+                         (m_sigaltstack_installed m)
+                         (procst_killed (m_proc m)) (m_sigabrt_pending m)
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) h)
             (m_lim m) (m_time m).
 
 Definition with_nofile (n : word) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
-            (mkLimState (m_rlimit_core m) n) (m_time m).
+            (mkLimState (m_rlimit_core m) (m_rlimit_stack m) n None) (m_time m).
+Definition with_nofile_pair (n : word) (bs : list byte) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
+            (mkLimState (m_rlimit_core m) (m_rlimit_stack m) n (Some bs))
+            (m_time m).
 Definition with_creds (c : Creds) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
             (mkProcState (m_halted m) (m_tid m) c
@@ -3773,7 +3822,7 @@ Definition with_creds (c : Creds) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
 Definition with_setsid_succeeded (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
@@ -3781,7 +3830,7 @@ Definition with_setsid_succeeded (m : Model) : Model :=
                          true (m_sigmask m) (procst_children (m_proc m))
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
 (** Record that the process now has something to reap.
@@ -3807,7 +3856,7 @@ Definition with_children (m : Model) : Model :=
                          (m_setsid_succeeded m) (m_sigmask m) true
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
 (** Install a new blocked mask.  [Kernel.Signal.rt_sigprocmask_spec] is
     the only caller, and the only kernel path that reaches
@@ -3827,7 +3876,7 @@ Definition with_sigmask (s : word) (m : Model) : Model :=
                          (m_setsid_succeeded m) s (m_has_children m)
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
 (** Record that a [sigaltstack] has installed an alternate stack.
@@ -3854,7 +3903,7 @@ Definition with_sigaltstack_installed (m : Model) : Model :=
                          (m_setsid_succeeded m) (m_sigmask m)
                          (m_has_children m) (m_utsname m) true
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
 (** Record that SIGABRT has been sent and is BLOCKED, so it waits in
@@ -3879,7 +3928,7 @@ Definition with_sigabrt_pending (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) true (m_abort_terminal m)
-                         (m_statpins m))
+                         (m_statpins m) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
 (** End the process by a fatal signal.  It writes the signal number into
@@ -3909,7 +3958,7 @@ Definition with_killed (sig : word) (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          true (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
             (m_lim m) (m_time m).
 
 (** The invariant the two fields are written under, stated where the
@@ -4299,6 +4348,8 @@ Fixpoint pipe_end_live (fds : list (word * FdEntry)) (id : word)
   | (_, FdSocket _) :: r => pipe_end_live r id writer
   | (_, FdDevNull _ _) :: r => pipe_end_live r id writer
   | (_, FdUrandom) :: r => pipe_end_live r id writer
+  | (_, FdProcMaps _) :: r => pipe_end_live r id writer
+  | (_, FdHpagePmdSize _) :: r => pipe_end_live r id writer
   end.
 
 (** A 32-bit value as the four little-endian bytes the kernel's
@@ -5181,18 +5232,14 @@ Qed.
     CONSTANT over a modeled run, which is why [Creds] can hold it and
     nothing has to write it back.
 
-    [in_nofile] is an input for the same reason, and CONSTANT for a
-    reason worth stating precisely, because an exec really can change
-    this limit: the LSM [bprm_committing_creds] hooks clamp every
+    [in_nofile] is an input for the same reason.  Exec can change the
+    inherited limit: the LSM [bprm_committing_creds] hooks clamp every
     resource including NOFILE (security/selinux/hooks.c,
     [selinux_bprm_committing_creds]; security/apparmor/resource.c; Linux
-    v6.18.46, commit 1f99e9ab748f).  What makes the field constant is
-    not that nothing writes it but WHEN the writers run — at exec, at
-    boot, on a core dump — and this model begins AT execve and reaches
-    none of them afterwards.  So the limit a run starts with is the one
-    it ends with, and where it came from is the environment's business.
-    [limst_nofile] carries the rest of the argument, over the syscalls
-    this model does admit.  Unlike [in_groups] it DOES carry a [Run.valid_input]
+    v6.18.46, commit 1f99e9ab748f).  This model starts after that
+    clamp.  [limst_nofile] tracks the current soft limit, which a
+    modeled [prlimit64] set may raise after the first NOFILE read.
+    Unlike [in_groups], [in_nofile] DOES carry a [Run.valid_input]
     clause, and the difference is which end bounds it: an over-long group
     list is refused where it is read, while the descriptor limit is
     ANSWERED from, so an unreachable value would be answered rather than
@@ -5228,8 +5275,9 @@ Record ProcInput := mkProcInput_full {
   in_nofile : word
     (* the SOFT RLIMIT_NOFILE the process is launched with, an
        [unsigned long] — see [LimState]'s [limst_nofile], which
-       [init_model] copies this into, and [Sys.Fs.File.dup3_spec], its
-       one reader.  [Run.valid_nofile] bounds it *);
+       [init_model] copies this into.  [Sys.Fs.File.dup3_spec] and the
+       NOFILE arm of [Sys.Kernel.Sys.prlimit64_spec] read the current
+       limit.  [Run.valid_nofile] bounds the inherited value *);
   in_sigmask : word
     (* the signals BLOCKED at the moment the process starts, as riscv64's
        one-word [sigset_t].  An input for the same reason [in_uid] is:
@@ -5327,17 +5375,25 @@ Record ProcInput := mkProcInput_full {
 
        [Run.valid_input] has NO clause naming it: [fs_seed_tmp] seeds
        any list into the canonical form, so every value is one a launch
-       could present ([fs_seed_tmp_valid]). *)
+       could present ([fs_seed_tmp_valid]). *);
+  in_proc_maps : option (list byte)
+    (* A declared snapshot of /proc/self/maps.  [None] leaves the path
+       outside the model.  [Some bs] covers reads that observe [bs]
+       while the process mappings remain stable. *);
+  in_hwprobe : option (word * word)
+    (* The stable response to a two-key riscv_hwprobe query for all online
+       CPUs: IMA_EXT_0 and CPUPERF_0.  None declines the query. *)
 }.
 
-(** THE POSITIONAL-LITERAL FORM: every field except the two ENVIRONMENT
-    fields at the end of the record ([in_urandom], [in_tmp]).
+(** THE POSITIONAL-LITERAL FORM: every field except the four ENVIRONMENT
+    fields at the end of the record ([in_urandom], [in_tmp], [in_proc_maps], [in_hwprobe]).
 
     The record's own constructor is [mkProcInput_full] and takes every
     field.  This takes the first thirteen, in that order,
-    and fills the last two with THE DEFAULT RANDOM STREAM and
-    THE EMPTY /tmp: [default_urandom], which is zero bytes forever, and
-    a private /tmp that starts empty.  So a literal written through this
+    and fills the last four with THE DEFAULT RANDOM STREAM,
+    THE EMPTY /tmp, NO MAPS SNAPSHOT, and NO HARDWARE PROBE RESPONSE:
+    [default_urandom] is zero bytes
+    forever, and a private /tmp starts empty.  So a literal written through this
     name denotes an input in an environment
     that holds no file of its own.
 
@@ -5352,7 +5408,7 @@ Record ProcInput := mkProcInput_full {
     form under this name, and putting every new environment field at
     the END, is what makes an added field a compile error there rather
     than a re-spelling of every literal.  A NEW literal that wants to
-    set either field uses [mkProcInput_full] or the record-brace form;
+    set any of these fields uses [mkProcInput_full] or the record-brace form;
     this one cannot express them, which is the point.
 
     It is a plain (transparent) [Definition], so it reduces wherever the
@@ -5364,7 +5420,7 @@ Definition mkProcInput
     (nofile sigmask hwcap : word) (abort_terminal : bool)
     (va_size : VaSize) : ProcInput :=
   mkProcInput_full argv envp image_fs stdin uid gid groups net
-    nofile sigmask hwcap abort_terminal va_size default_urandom [].
+    nofile sigmask hwcap abort_terminal va_size default_urandom [] None None.
 
 (** THE FILE SYSTEM THE RUN STARTS WITH: the image, with the run's
     declared private /tmp seeded into it under absolute keys.
@@ -5428,7 +5484,9 @@ Definition in_fs (inp : ProcInput) : Fs.Fs :=
 
 Definition init_model (reserved : list (word * word)) (brk0 mbase sp : word)
     (lim : Z) (inp : ProcInput) : Model :=
-  with_abort_terminal (in_abort_terminal inp)
+  with_proc_maps (in_proc_maps inp)
+  (with_hwprobe (in_hwprobe inp)
+  (with_abort_terminal (in_abort_terminal inp)
   (with_sigmask (in_sigmask inp)
   (with_nofile (in_nofile inp)
    (with_net (in_net inp)
@@ -5445,7 +5503,7 @@ Definition init_model (reserved : list (word * word)) (brk0 mbase sp : word)
        (in_fs inp)
        None
        None
-       None)))))).
+       None)))))))).
 
 (** The base case of the nonemptiness invariant: a run starts with NO
     protected range at all.  Every reachable [vm_noaccess] is therefore
@@ -6757,8 +6815,8 @@ Proof. reflexivity. Qed.
 (** And the accessors of a freshly built model. *)
 
 (** The soft descriptor limit's row and column of the table above.
-    [with_nofile] runs once, in [init_model], so the column exists for the
-    accessors that read a model built by it; the row is what a proof about
+    [with_nofile] seeds the input in [init_model]; [with_nofile_pair] may
+    later replace it.  The row is what a proof about
     [Sys.Fs.File.dup3_spec] needs, since installing a descriptor rewrites
     the fd table and the limit has to survive that. *)
 

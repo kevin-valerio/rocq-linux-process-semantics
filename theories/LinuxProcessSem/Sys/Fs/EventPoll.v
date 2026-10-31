@@ -298,6 +298,8 @@ Definition fd_can_poll (e : FdEntry) : option bool :=
          ([random_fops] has one; the urandom table does not), so
          [file_can_poll] is false and [epoll_ctl] ADD is the same
          -EPERM.  Declined until written. *)
+  | FdProcMaps _ => None
+  | FdHpagePmdSize _ => None
   end.
 
 (** The complement claim, as a check rather than a sentence.
@@ -325,7 +327,7 @@ Definition fd_can_poll (e : FdEntry) : option bool :=
 Example fd_can_poll_is_select_pollable :
   forall e, bits_all_pollable [(Z_to_bv 64 0, e)] 1%Z 1%nat = true
             <-> fd_can_poll e = Some false.
-Proof. intros [| | | | | | | | |]; vm_compute; split; congruence. Qed.
+Proof. intros e; destruct e; vm_compute; split; congruence. Qed.
 
 (** ------------------------------------------------------------------
     epoll_create1 (20)

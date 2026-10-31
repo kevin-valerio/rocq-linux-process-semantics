@@ -16,7 +16,7 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Witness Require Export
   Prelude.
 
-Definition mprotect_witness (addr len prot : word) (m : Model)
+Definition mprotect_witness (addr len prot : word) (i : SyscallInput) (m : Model)
     : outcome SyscallEffect :=
   if mprotect_grows_conflict_b prot
   then ret_outcome (errno_ret EINVAL) m
@@ -35,10 +35,15 @@ Definition mprotect_witness (addr len prot : word) (m : Model)
             && region_free (vm_noaccess (m_vmmaps m)) addr n
          then ret_outcome (Z_to_bv 64 0) m
          else Unmodeled
+  else if mprotect_readonly_b prot then
+    let n := Z_to_bv 64 (page_round_up_Z (bv_unsigned len)) in
+    if mprotect_readonly_range_b i m addr n
+    then ret_outcome (errno_ret witness_errno) m
+    else Unmodeled
   else Unmodeled.
 
 Lemma mprotect_witness_ok : forall addr len prot i m,
-  mprotect_spec addr len prot i m (mprotect_witness addr len prot m).
+  mprotect_spec addr len prot i m (mprotect_witness addr len prot i m).
 Proof.
   intros. unfold mprotect_spec, mprotect_witness.
   destruct (mprotect_grows_conflict_b prot) eqn:Hgrows; [apply pure_ok|].
@@ -48,7 +53,16 @@ Proof.
   destruct ((two_pow_64
              <=? bv_unsigned addr + page_round_up_Z (bv_unsigned len))%Z)
     eqn:Hbig; [apply pure_ok|].
-  destruct (mprotect_modeled_b prot) eqn:Hprot; [|apply unmodeled_intro].
+  destruct (mprotect_modeled_b prot) eqn:Hprot.
+  2: { destruct (mprotect_readonly_b prot) eqn:Hro;
+         [|apply unmodeled_intro].
+       eapply bind_step; [apply input_ok|].
+       eapply bind_step; [apply get_model_ok|]. cbv beta zeta.
+       destruct (mprotect_readonly_range_b i m addr
+         (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))) eqn:Hrange.
+       - apply alt_l. eapply bind_step;
+           [apply errno_head_witness|apply pure_ok].
+       - apply unmodeled_intro. }
   eapply bind_step; [apply get_model_ok|]. cbv beta zeta.
   destruct (map_contains (vm_noaccess (m_vmmaps m)) addr
               (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))

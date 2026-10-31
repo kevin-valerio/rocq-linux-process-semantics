@@ -91,12 +91,14 @@
                                                    security/commoncap.c's
                                                    cap_task_prctl, reached
                                                    through kernel/sys.c's
-                                                   security_task_prctl)
+                                                   security_task_prctl;
+                                                   PR_SET_VMA uses mm/madvise.c)
       Sys/Kernel/Time/Hrtimer.v  kernel/time/hrtimer.c       nanosleep
       Sys/Kernel/Time/PosixTimers.v
                                  kernel/time/posix-timers.c  clock_gettime clock_getres
       Sys/Kernel/Time/Time.v     kernel/time/time.c          gettimeofday
       Sys/Net/Socket.v           net/socket.c      socket bind listen accept connect accept4
+      Sys/Arch/Riscv/Hwprobe.v   arch/riscv/kernel/sys_hwprobe.c  riscv_hwprobe
       Sys/Drivers/Char/Random.v  drivers/char/random.c  getrandom
 
     Three files carry what the kernel keeps in headers rather than in
@@ -120,6 +122,7 @@ From LinuxProcessSemantics.LinuxProcessSem.Sys Require Export
   Kernel.Signal Kernel.Sys
   Kernel.Time.Hrtimer Kernel.Time.PosixTimers Kernel.Time.Time
   Net.Socket
+  Arch.Riscv.Hwprobe
   Drivers.Char.Random.
 Import ListNotations.
 Open Scope bv_scope.

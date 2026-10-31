@@ -56,8 +56,8 @@ Definition atomic_state (pc : word) (addr : Z) (resv : option word)
   ms_svc_pending := None;
   ms_resv := resv; ms_fcsr := Z_to_bv 32 0;
   ms_mem := atomic_data;
-  ms_rom := fun _ => None
-|}.
+  ms_rom := fun _ => None;
+  ms_ro := [] |}.
 
 Definition pc_lr_w : word := Z_to_bv 64 0x100.
 Definition pc_lr_d : word := Z_to_bv 64 0x104.

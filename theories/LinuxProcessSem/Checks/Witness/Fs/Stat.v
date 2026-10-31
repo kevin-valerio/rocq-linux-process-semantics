@@ -16,17 +16,73 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Witness Require Export
   Prelude.
 
-Definition readlinkat_witness (dirfd : word) (m : Model)
+Definition readlinkat_witness (i : SyscallInput) (dirfd : word) (m : Model)
     : outcome SyscallEffect :=
-  if negb (bv_eqb dirfd AT_FDCWD32) then Unmodeled
-  else ret_outcome (errno_ret EINVAL) m.
+  if (sint32 (in_arg i 3) <=? 0)%Z then
+    ret_outcome (errno_ret EINVAL) m
+  else
+  outcome_copyins (readlinkat_reads i)
+  (
+  match read_cstr (in_mem i) (in_arg i 1) with
+  | CstrOk p =>
+      if path_eqb p proc_self_exe_path then
+        let buf := in_arg i 2 in
+        let bufsiz := readlinkat_bufsiz i in
+        let size := bv_unsigned bufsiz in
+        if negb (Z.leb 1 size && Z.leb size (Z.of_nat path_max))
+        then Unmodeled
+        else if negb (access_okb buf size) then Unmodeled
+        else match read_bytes_map (in_wmem i) buf bufsiz with
+             | None => Unmodeled
+             | Some _ =>
+                 let bs := [Z_to_bv 8 47] in
+                 Ok (mkEffect (len_word bs) [(buf, bs)] []) m []
+             end
+      else if negb (bv_eqb dirfd AT_FDCWD32) then Unmodeled
+           else ret_outcome
+                  (if path_eqb p [] then errno_ret ENOENT else errno_ret EINVAL) m
+  | CstrTooLong => ret_outcome (errno_ret ENAMETOOLONG) m
+  | CstrFault => ret_outcome (errno_ret EFAULT) m
+  end).
 
-Lemma readlinkat_witness_ok : forall dirfd i m,
-  readlinkat_spec dirfd i m (readlinkat_witness dirfd m).
+Lemma readlinkat_witness_ok : forall i dirfd m,
+  readlinkat_spec dirfd i m (readlinkat_witness i dirfd m).
 Proof.
-  intros. unfold readlinkat_spec, readlinkat_witness.
-  destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd; cbv beta iota.
-  - apply unmodeled_intro.
+  intros i dirfd m. unfold readlinkat_spec, readlinkat_witness.
+  eapply bind_step; [apply input_ok|]. cbv beta.
+  destruct ((sint32 (in_arg i 3) <=? 0)%Z) eqn:Hearly.
+  { unfold err_ret, ret_only, ret_outcome. apply pure_ok. }
+  apply record_copyins_outcome.
+  destruct (read_cstr (in_mem i) (in_arg i 1)) as [p| |] eqn:Hp.
+  - destruct (path_eqb p proc_self_exe_path) eqn:Hexe.
+    + destruct (negb (Z.leb 1 (bv_unsigned (readlinkat_bufsiz i))
+                     && Z.leb (bv_unsigned (readlinkat_bufsiz i)) (Z.of_nat path_max)))
+        eqn:Hsize.
+      { apply unmodeled_intro. }
+      destruct (negb (access_okb (in_arg i 2) (bv_unsigned (readlinkat_bufsiz i))))
+        eqn:Haccess.
+      { apply unmodeled_intro. }
+      destruct (read_bytes_map (in_wmem i) (in_arg i 2) (readlinkat_bufsiz i))
+        as [old|] eqn:Hmem.
+      2: { apply unmodeled_intro. }
+      apply alt_r. eapply bind_step.
+        -- apply (choose_ok _ [Z_to_bv 8 47]).
+           unfold exe_link_bytes_ok.
+           apply Bool.negb_false_iff in Hsize.
+           apply andb_true_iff in Hsize as [Hmin _].
+           assert (Hslash :
+             negb (bv_eqb (Z_to_bv 8 47) (Z_to_bv 8 0)) = true)
+             by (vm_compute; reflexivity).
+           cbn [length Nat.eqb forallb].
+           rewrite Hslash.
+           replace (Z.of_nat 1) with 1%Z by reflexivity.
+           rewrite Hmin. reflexivity.
+        -- apply pure_ok.
+    + destruct (negb (bv_eqb dirfd AT_FDCWD32)) eqn:Hd.
+      * apply unmodeled_intro.
+      * destruct (path_eqb p []);
+        unfold err_ret, ret_only, ret_outcome; apply pure_ok.
+  - unfold err_ret, ret_only, ret_outcome. apply pure_ok.
   - unfold err_ret, ret_only, ret_outcome. apply pure_ok.
 Qed.
 
@@ -294,6 +350,44 @@ Proof.
     [apply stat_urandom_witness_base_wf | apply stat_urandom_witness_base_ok].
 Qed.
 
+Definition stat_proc_maps_witness_base : list byte :=
+  Z_to_le_bytes 16 0 ++ Z_to_le_bytes 4 (S_IFREG + 292)
+  ++ Z_to_le_bytes 4 1 ++ Z_to_le_bytes 104 0.
+
+Lemma stat_proc_maps_witness_base_wf :
+  stat_buf_wf stat_proc_maps_witness_base = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Lemma stat_proc_maps_witness_base_ok :
+  stat_proc_maps_ok stat_proc_maps_witness_base = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Definition fstat_proc_maps_witness (statbuf : word) (i : SyscallInput)
+    (m : Model) : outcome SyscallEffect :=
+  if negb (access_okb statbuf STAT_SIZE)
+  then ret_outcome (errno_ret EFAULT) m
+  else match read_bytes_map (in_wmem i) statbuf (Z_to_bv 64 STAT_SIZE) with
+       | None => Unmodeled
+       | Some _ => Ok (mkEffect (Z_to_bv 64 0)
+                         [(statbuf, stat_proc_maps_witness_base)] []) m []
+       end.
+
+Lemma fstat_proc_maps_witness_ok : forall statbuf i m,
+  fstat_proc_maps_spec statbuf i m (fstat_proc_maps_witness statbuf i m).
+Proof.
+  intros statbuf i m. unfold fstat_proc_maps_spec, fstat_proc_maps_witness.
+  eapply bind_step; [apply input_ok|]. cbv beta.
+  destruct (negb (access_okb statbuf STAT_SIZE)) eqn:Ha; cbv iota.
+  - unfold err_ret, ret_only, ret_outcome. apply pure_ok.
+  - destruct (read_bytes_map (in_wmem i) statbuf (Z_to_bv 64 STAT_SIZE))
+      as [w|] eqn:Hw; cbv iota; [|apply unmodeled_intro].
+    eapply bind_step;
+      [apply (choose_ok _ stat_proc_maps_witness_base); split;
+       [apply stat_proc_maps_witness_base_wf
+       |apply stat_proc_maps_witness_base_ok]|].
+    apply pure_ok.
+Qed.
+
 (** fstat (80) — -EBADF on a descriptor the process does not hold, a
     delivered [struct stat] on the four file kinds and on the two device
     kinds, and [Unmodeled] on the other four. *)
@@ -311,6 +405,8 @@ Definition fstat_witness (fd statbuf : word) (i : SyscallInput) (m : Model)
   | Some (FdPipe _ _)  => Unmodeled
   | Some (FdDevNull _ _) => fstat_devnull_witness statbuf i m
   | Some FdUrandom => fstat_urandom_witness statbuf i m
+  | Some (FdProcMaps _) => fstat_proc_maps_witness statbuf i m
+  | Some (FdHpagePmdSize _) => Unmodeled
   end.
 
 Lemma fstat_witness_ok : forall fd statbuf i m,
@@ -322,7 +418,8 @@ Proof.
     [destruct e; cbv iota;
        first [apply unmodeled_intro | apply fstat_file_witness_ok
              | apply fstat_devnull_witness_ok
-             | apply fstat_urandom_witness_ok]
+             | apply fstat_urandom_witness_ok
+             | apply fstat_proc_maps_witness_ok]
     |unfold ret_outcome; apply pure_ok].
 Qed.
 

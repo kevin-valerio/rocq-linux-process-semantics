@@ -119,7 +119,7 @@ Definition demo_init_state (pc : N) (sp : word)
      ms_resv := None;
      ms_fcsr := Z_to_bv 32 0;
      ms_mem := mem;
-     ms_rom := rom |}.
+     ms_rom := rom; ms_ro := [] |}.
 
 (** ... and it really is [Run.init_machine_state]: whatever the argv,
     the envp, the uid and the published hart capabilities, the initial

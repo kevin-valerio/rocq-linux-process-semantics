@@ -16,7 +16,8 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Sys Require Export
   Prelude Fs.ReadWrite.
 
-Definition check_mprotect (addr len prot : word) (eff : SyscallEffect) (m : Model)
+Definition check_mprotect (addr len prot : word) (i : SyscallInput)
+    (eff : SyscallEffect) (m : Model)
     : check_result :=
   if mprotect_grows_conflict_b prot
   then check_ret_only eff (errno_ret EINVAL) m []
@@ -25,7 +26,20 @@ Definition check_mprotect (addr len prot : word) (eff : SyscallEffect) (m : Mode
   else if w_is0 len then check_ret_only eff (Z_to_bv 64 0) m []
   else if (two_pow_64 <=? bv_unsigned addr + page_round_up_Z (bv_unsigned len))%Z
   then check_ret_only eff (errno_ret ENOMEM) m []
-  else if negb (mprotect_modeled_b prot) then CheckUnmodeled
+  else if negb (mprotect_modeled_b prot) then
+    if mprotect_readonly_b prot then
+      let n := Z_to_bv 64 (page_round_up_Z (bv_unsigned len)) in
+      if mprotect_readonly_range_b i m addr n then
+        match eff with
+        | mkEffectU r [] [] [] cs [] =>
+            if errno_ret_in mprotect_errnos r then
+              match cs with [] => CheckOk m [] | _ => CheckReject end
+            else if w_is0 r && listCopy_eqb cs [mkProtectRO addr n]
+                 then CheckOk m [] else CheckReject
+        | _ => CheckReject
+        end
+      else CheckUnmodeled
+    else CheckUnmodeled
   else
     let nZ := page_round_up_Z (bv_unsigned len) in
     let n := Z_to_bv 64 nZ in
@@ -52,7 +66,7 @@ Definition check_mprotect (addr len prot : word) (eff : SyscallEffect) (m : Mode
     else CheckUnmodeled.
 
 Lemma check_mprotect_sound_ok : forall addr len prot eff m m' evs i,
-  check_mprotect addr len prot eff m = CheckOk m' evs ->
+  check_mprotect addr len prot i eff m = CheckOk m' evs ->
   mprotect_spec addr len prot i m (Ok eff m' evs).
 Proof.
   intros addr len prot eff m m' evs i H.
@@ -71,8 +85,35 @@ Proof.
     eqn:Hbig.
   { apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
     apply pure_ok. }
-  destruct (mprotect_modeled_b prot) eqn:Hprot; cbn [negb] in H;
-    [|discriminate].
+  destruct (mprotect_modeled_b prot) eqn:Hprot; cbn [negb] in H.
+  2: { destruct (mprotect_readonly_b prot) eqn:Hro; [|discriminate].
+       cbv zeta in H.
+       destruct (mprotect_readonly_range_b i m addr
+         (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))) eqn:Hrange;
+         [|discriminate].
+       destruct eff as [r ws zs us cs copyins].
+       destruct ws, zs, us, copyins; try discriminate.
+       destruct (errno_ret_in mprotect_errnos r) eqn:He.
+       - destruct cs as [|c cs]; [|discriminate].
+         inversion H; clear H; subst.
+         eapply bind_ok0; [apply input_ok|].
+         eapply bind_ok0; [apply get_model_ok|].
+         cbv beta zeta. rewrite Hrange.
+         apply errno_ret_in_true in He as (e & HIn & ->).
+         apply alt_l. eapply bind_ok0;
+           [apply (choose_ok _ e); exact HIn|apply pure_ok].
+       - destruct (w_is0 r && listCopy_eqb cs
+           [mkProtectRO addr
+              (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))]) eqn:Hz;
+           [|discriminate].
+         inversion H; clear H; subst.
+         apply andb_true_iff in Hz as [Hr Hcs].
+         unfold w_is0 in Hr. apply bv_eqb_eq in Hr; subst r.
+         apply listCopy_eqb_eq in Hcs; subst cs.
+         eapply bind_ok0; [apply input_ok|].
+         eapply bind_ok0; [apply get_model_ok|].
+         cbv beta zeta. rewrite Hrange.
+         apply alt_r. apply pure_ok. }
   cbv zeta in H.
   destruct (map_contains (vm_noaccess (m_vmmaps m)) addr
               (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))
@@ -122,7 +163,7 @@ Proof.
 Qed.
 
 Lemma check_mprotect_sound_unmodeled : forall addr len prot eff m i,
-  check_mprotect addr len prot eff m = CheckUnmodeled ->
+  check_mprotect addr len prot i eff m = CheckUnmodeled ->
   mprotect_spec addr len prot i m Unmodeled.
 Proof.
   intros addr len prot [r ws zs us cs copyins] m i H.
@@ -138,7 +179,21 @@ Proof.
     eqn:Hbig.
   { now apply check_ret_only_no_unmodeled in H. }
   destruct (mprotect_modeled_b prot) eqn:Hprot; cbn [negb] in H.
-  2: apply unmodeled_intro.
+  2: { destruct (mprotect_readonly_b prot) eqn:Hro.
+       - destruct (mprotect_readonly_range_b i m addr
+           (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))) eqn:Hrange.
+         + destruct ws, zs, us, copyins;
+             try discriminate.
+           destruct (errno_ret_in mprotect_errnos r).
+           * destruct cs; discriminate.
+           * destruct (w_is0 r && listCopy_eqb cs
+               [mkProtectRO addr
+                 (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))]);
+               discriminate.
+         + eapply bind_unmodeled2; [apply input_ok|].
+           eapply bind_unmodeled2; [apply get_model_ok|].
+           cbv beta zeta. rewrite Hrange. apply unmodeled_intro.
+       - apply unmodeled_intro. }
   cbv zeta in H.
   destruct (map_contains (vm_noaccess (m_vmmaps m)) addr
               (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))
@@ -168,7 +223,7 @@ Qed.
 
 Lemma check_mprotect_complete_ok : forall addr len prot eff m m' evs i,
   mprotect_spec addr len prot i m (Ok eff m' evs) ->
-  check_mprotect addr len prot eff m = CheckOk m' evs.
+  check_mprotect addr len prot i eff m = CheckOk m' evs.
 Proof.
   intros addr len prot eff m m' evs i H.
   unfold mprotect_spec in H. unfold check_mprotect.
@@ -183,7 +238,23 @@ Proof.
     eqn:Hbig.
   { sys_unfold. inv_ok. cbn; try rewrite bv_eqb_refl; reflexivity. }
   destruct (mprotect_modeled_b prot) eqn:Hprot; cbn [negb].
-  2: { unfold unmodeled in H. discriminate. }
+  2: { destruct (mprotect_readonly_b prot) eqn:Hro;
+         [|unfold unmodeled in H; discriminate].
+       destruct (mprotect_readonly_range_b i m addr
+         (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))) eqn:Hrange.
+       2: { sys_unfold. cbv iota in H. inv_ok.
+            rewrite Hrange in *. discriminate. }
+       sys_unfold. cbv iota in H. inv_ok.
+       match goal with
+       | Hshape : context [if mprotect_readonly_range_b i m addr _ then _ else _] |- _ =>
+           rewrite Hrange in Hshape
+       end.
+       cbn in *. inv_ok.
+       - cbv zeta. rewrite bv_eqb_refl. reflexivity.
+       - cbv zeta.
+         change (errno_ret_in mprotect_errnos (Z_to_bv 64 0)) with false.
+         unfold w_is0. rewrite bv_eqb_refl.
+         rewrite (proj2 (listCopy_eqb_eq _ _) eq_refl). reflexivity. }
   destruct (map_contains (vm_noaccess (m_vmmaps m)) addr
               (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))
             && map_contains (vm_maps (m_vmmaps m)) addr
@@ -218,7 +289,7 @@ Qed.
 
 Lemma check_mprotect_complete_unmodeled : forall addr len prot m i eff,
   mprotect_spec addr len prot i m Unmodeled ->
-  check_mprotect addr len prot eff m = CheckUnmodeled.
+  check_mprotect addr len prot i eff m = CheckUnmodeled.
 Proof.
   intros addr len prot m i eff H.
   unfold mprotect_spec in H. unfold check_mprotect.
@@ -233,7 +304,16 @@ Proof.
     eqn:Hbig.
   { sys_unfold. cbv iota in H. inv_ok; discriminate. }
   destruct (mprotect_modeled_b prot) eqn:Hprot; cbn [negb].
-  2: reflexivity.
+  2: { destruct (mprotect_readonly_b prot) eqn:Hro; [|reflexivity].
+       destruct (mprotect_readonly_range_b i m addr
+         (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))) eqn:Hrange;
+         [|reflexivity].
+       exfalso. sys_unfold. cbv iota in H. inv_ok.
+       match goal with
+       | Hshape : context [if mprotect_readonly_range_b i m addr _ then _ else _] |- _ =>
+           rewrite Hrange in Hshape
+       end.
+       cbn in *. inv_ok. }
   destruct (map_contains (vm_noaccess (m_vmmaps m)) addr
               (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))
             && map_contains (vm_maps (m_vmmaps m)) addr

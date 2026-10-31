@@ -587,14 +587,14 @@ Qed.
 Definition pend (regs : bvmap 5 word) (pc : word) (mem rom : word -> option byte)
     : machine_state :=
   {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc; ms_svc_pending := Some (Z_to_bv 64 64);
-     ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |}.
+     ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |}.
 
 (** Collapse [advance_past_svc (set_gpr0 <record> v)] to a [mkst]: advance the
     PC past the svc after writing the (dead) syscall return to x10. *)
 Lemma adv_set : forall regs pc sv mem rom v,
   advance_past_svc (set_gpr0
     {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc; ms_svc_pending := sv; ms_resv := None; ms_fcsr := fp_csr;
-       ms_mem := mem; ms_rom := rom |} v)
+       ms_mem := mem; ms_rom := rom; ms_ro := [] |} v)
   = mkst (regupd regs 10 v) (v_addi pc 4) mem rom.
 Proof.
   intros regs pc sv mem rom v.
@@ -647,7 +647,7 @@ Lemma tw_write_rec : forall segs regs pc mem rom buf bufs code,
   reg_get regs 10 = Z_to_bv 64 1 ->
   ms_read_bytes {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                    ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-                   ms_mem := mem; ms_rom := rom |}
+                   ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (reg_get regs 11) (reg_get regs 12) = Some buf ->
   (1 <= length buf)%nat ->
   (forall n, (1 <= n)%nat -> (n <= length buf)%nat ->
@@ -655,7 +655,7 @@ Lemma tw_write_rec : forall segs regs pc mem rom buf bufs code,
                          (v_addi pc 4) mem rom) bufs code) ->
   to_wexit segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                    ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-                   ms_mem := mem; ms_rom := rom |}
+                   ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (buf :: bufs) code.
 Proof.
   intros segs regs pc mem rom buf bufs code H17 H10 Hr Hnb Hcont.
@@ -674,7 +674,7 @@ Lemma tw_exit_rec : forall segs regs pc mem rom,
   reg_get regs 10 = Z_to_bv 64 0 ->
   to_wexit segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                    ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-                   ms_mem := mem; ms_rom := rom |} [] (Z_to_bv 64 0).
+                   ms_mem := mem; ms_rom := rom; ms_ro := [] |} [] (Z_to_bv 64 0).
 Proof.
   intros segs regs pc mem rom H17 H10.
   eapply tw_exit0.

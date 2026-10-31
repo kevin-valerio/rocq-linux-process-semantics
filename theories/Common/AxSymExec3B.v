@@ -1374,7 +1374,11 @@ Fixpoint log_lookupB (bc : bctx) (log : list sentry) (rb : expr) (rk : Z) (n : n
       | RDisjoint => log_lookupB bc rest rb rk n sx hints acc
       | RPartial => match log_bytes_lit log rb rk n with
                     | Some bs => LHit (lit_of_bytes sx n bs) acc hints
-                    | None => LStuck
+                    | None =>
+                        match log_bytes_expr log rb rk n with
+                        | Some e => LHit (mkExt sx 0 n e) acc hints
+                        | None => LStuck
+                        end
                     end
       | RUnknown =>
           if ranges_apartB bc rb rk (Z.of_nat n) kb kk (Z.of_nat w)
@@ -1511,7 +1515,12 @@ Definition sym_readB (segs : list Segment) (ss : sym_state) (bc : bctx) (scr : s
            (a : saddr) (n : nat) (sx' : bool)
   : option (expr * list sidecond * scripts * nat) :=
   match log_lookupB bc (s_log ss) (a_base a) (a_off a) n sx' (sc_hints scr) [] with
-  | LStuck => None
+  | LStuck =>
+      match log_base_bytes_lit segs (s_know ss) (s_log ss)
+        (a_base a) (a_off a) n with
+      | Some bs => Some (lit_of_bytes sx' n bs, flat_scB bc a n, scr, s_next ss)
+      | None => None
+      end
   | LHit v scs hints =>
       Some (extKB bc v, flat_scB bc a n ++ scs, SCR (sc_dirs scr) (sc_reads scr) hints, s_next ss)
   | LMiss scs hints =>
@@ -2062,7 +2071,12 @@ Definition sym_readBI (segs : list Segment) (ss : sym_state) (bc : bctx) (kx : k
            (a : saddr) (n : nat) (sx' : bool)
   : option (expr * list sidecond * scripts * nat) :=
   match log_lookupB bc (s_log ss) (a_base a) (a_off a) n sx' (sc_hints scr) [] with
-  | LStuck => None
+  | LStuck =>
+      match log_base_bytes_lit segs (s_know ss) (s_log ss)
+        (a_base a) (a_off a) n with
+      | Some bs => Some (lit_of_bytes sx' n bs, flat_scB bc a n, scr, s_next ss)
+      | None => None
+      end
   | LHit v scs hints =>
       Some (extKB bc v, flat_scB bc a n ++ scs, SCR (sc_dirs scr) (sc_reads scr) hints, s_next ss)
   | LMiss scs hints =>
@@ -2358,7 +2372,7 @@ Proof. intros. unfold sym_stepB, sym_step. autorewrite with bceq. reflexivity. Q
 Lemma sym_step_know : forall segs i ss scr ss' scs scr',
   sym_step segs i ss scr = SOk ss' scs scr' -> s_know ss' = s_know ss.
 Proof.
-  intros segs i ss scr ss' scs scr' H. unfold sym_step, sym_read in H.
+  intros segs i ss scr ss' scs scr' H. unfold sym_step, sym_step_size, sym_read in H.
   destruct i; try discriminate;
   repeat (lazymatch type of H with
           | SOk _ _ _ = SOk _ _ _ => injection H as <- _ _

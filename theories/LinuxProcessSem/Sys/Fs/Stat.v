@@ -18,39 +18,72 @@ Import ListNotations.
 Open Scope bv_scope.
 Open Scope sys_scope.
 
-(** [readlinkat dirfd path buf bufsiz]: the modeled file system has NO
-    symlinks (Fs.v: paths are uninterpreted names, no symlink objects),
-    so no path a program can name resolves to one — and readlink(2) on
-    anything that is not a symlink is -EINVAL.
+(** The executable's procfs link is available even though [Fs.Fs] has no
+    symlink objects.  Linux resolves [/proc/self/exe] through procfs;
+    QEMU user mode recognizes that path and copies its [exec_path].
+    Both can return a nonempty prefix without a terminating NUL.  The
+    target can change if another process renames the executable, so each
+    call chooses its bytes independently.  This scope covers executable
+    paths whose [d_path] result begins with '/'.  Filesystems that supply
+    another [d_dname] result are outside this scope.  Procfs can answer
+    -ENOENT if the task has no executable file, so that outcome is admitted.
+    The model covers this path when the whole output buffer is writable
+    and its size is 1..PATH_MAX.
+    The pathname read is charged for every answered result.  Other
+    buffer shapes still fail closed. *)
+Definition proc_self_exe_path : path :=
+  map (Z_to_bv 8)
+    [47%Z;112%Z;114%Z;111%Z;99%Z;47%Z;115%Z;101%Z;
+     108%Z;102%Z;47%Z;101%Z;120%Z;101%Z].
 
-    The DIRFD is the one argument that is checked, and only AT_FDCWD is
-    modeled: [do_readlinkat] resolves the dirfd through [fdget_raw]
-    inside path resolution, so [readlinkat(999, "f", buf, 64)] is -EBADF
-    on Linux — asserting -EINVAL there would
-    REJECT a conforming trace, which is worse than declining.  Any other
-    dirfd therefore is [unmodeled], fail closed, exactly as openat's does.
-    [dirfd] arrives already truncated to 32 bits (see [Syscall.fd32]), so
-    [readlinkat(2^32 - 100, ...)] names the working directory as Linux
-    does.
+Definition exe_link_bytes_ok (bufsiz : word) (bs : list byte) : bool :=
+  (match bs with
+   | [] => false
+   | first :: _ => bv_eqb first (Z_to_bv 8 47)
+   end)
+  && Z.leb (Z.of_nat (length bs)) (bv_unsigned bufsiz)
+  && forallb (fun b => negb (bv_eqb b (Z_to_bv 8 0))) bs.
 
-    Everything under AT_FDCWD is the deterministic -EINVAL.  No other
-    argument is validated.  ORDERING CHOICE: the kernel resolves the
-    path BEFORE touching the output buffer, so the path-based -EINVAL
-    wins over any buffer problem — the buffer is deliberately NOT
-    checked against [in_wmem] (a successful readlinkat never happens, so
-    no byte is ever delivered).
+Definition readlinkat_reads (i : SyscallInput) : list (word * nat) :=
+  [(in_arg i 1, cstr_access_len_aux (in_mem i) (in_arg i 1) path_max)].
 
-    APPROXIMATION (deliberate).  Under AT_FDCWD the path itself
-    is still not interpreted, so a missing path (-ENOENT on Linux) and a bad
-    path pointer (-EFAULT) are both coarsened to -EINVAL, and the [int bufsiz]
-    gate Linux applies BEFORE path resolution ([bufsiz <= 0] is -EINVAL) is
-    subsumed rather than modeled.  Those are FALSE REJECTIONS of conforming
-    traces, not fail-closed gaps: no modeled binary consumes readlinkat's
-    result, and interpreting the path here would duplicate openat's path-errno
-    machinery. *)
+Definition readlinkat_bufsiz (i : SyscallInput) : word :=
+  abi_low32 (in_arg i 3).
+
+(** [readlinkat] (78).  A nonpositive signed 32-bit buffer size returns
+    -EINVAL before any pathname read, as [do_readlinkat] does.  Only the
+    procfs executable link has a success arm.  The absolute path ignores
+    [dirfd], as Linux and QEMU do.  The
+    old AT_FDCWD error arm remains for nonempty paths represented by the
+    flat, symlink-free file system.  Other path resolutions can return
+    -ENOENT and remain outside that arm.  Pathname faults, overlong
+    names, and an empty AT_FDCWD pathname have their kernel errnos. *)
 Definition readlinkat_spec (dirfd : word) : Sys SyscallEffect :=
-  if negb (bv_eqb dirfd AT_FDCWD32) then unmodeled   (* unmodeled dirfd: fail closed *)
-  else err_ret EINVAL.
+  i <- input ;;
+  if (sint32 (in_arg i 3) <=? 0)%Z then err_ret EINVAL else
+  record_copyins (readlinkat_reads i)
+  (match read_cstr (in_mem i) (in_arg i 1) with
+  | CstrOk p =>
+      if path_eqb p proc_self_exe_path then
+        let buf := in_arg i 2 in
+        let bufsiz := readlinkat_bufsiz i in
+        let size := bv_unsigned bufsiz in
+        if negb (Z.leb 1 size && Z.leb size (Z.of_nat path_max))
+        then unmodeled
+        else if negb (access_okb buf size) then unmodeled
+        else match read_bytes_map (in_wmem i) buf bufsiz with
+             | None => unmodeled
+             | Some _ =>
+                 alt (err_ret ENOENT)
+                   (bs <- choose (fun bs : list byte =>
+                                    exe_link_bytes_ok bufsiz bs = true) ;;
+                    pure (mkEffect (len_word bs) [(buf, bs)] []))
+             end
+      else if negb (bv_eqb dirfd AT_FDCWD32) then unmodeled
+           else if path_eqb p [] then err_ret ENOENT else err_ret EINVAL
+  | CstrTooLong => err_ret ENAMETOOLONG
+  | CstrFault => err_ret EFAULT
+  end).
 
 (** The flag WORDS [newfstatat_spec] interprets: 0 (plain [stat]) and
     AT_SYMLINK_NOFOLLOW ([lstat]).  Those are the only two riscv64 musl
@@ -588,6 +621,20 @@ Definition fstat_devnull_spec (statbuf : word) : Sys SyscallEffect :=
 Definition fstat_urandom_spec (statbuf : word) : Sys SyscallEffect :=
   fstat_chrdev_spec urandom_path stat_urandom_ok statbuf.
 
+(** Procfs generates the maps contents when read, while fstat reports
+    the inode's zero size.  Its owner can change with the process's
+    credentials, so this arm does not use the ordinary file stat pin. *)
+Definition fstat_proc_maps_spec (statbuf : word) : Sys SyscallEffect :=
+  i <- input ;;
+  if negb (access_okb statbuf STAT_SIZE) then err_ret EFAULT
+  else match read_bytes_map (in_wmem i) statbuf (Z_to_bv 64 STAT_SIZE) with
+       | None => unmodeled
+       | Some _ =>
+           bs <- choose (fun bs : list byte =>
+                           stat_buf_wf bs = true /\ stat_proc_maps_ok bs = true) ;;
+           pure (mkEffect (Z_to_bv 64 0) [(statbuf, bs)] [])
+       end.
+
 (** THE MATCH BELOW IS TOTAL ON [FdEntry] ON PURPOSE, with no wildcard.
     A new constructor is a new kind of file, and whoever adds it must
     decide what [fstat] says about it; the non-exhaustive-match error is
@@ -689,5 +736,7 @@ Definition fstat_spec (fd statbuf : word) : Sys SyscallEffect :=
                                      (* the random device: S_IFCHR, [st_rdev] 1:9
                                         ([Uapi.stat_urandom_ok]), the rest pinned once
                                         under [Uapi.urandom_path] *)
+  | Some (FdProcMaps _) => fstat_proc_maps_spec statbuf
+  | Some (FdHpagePmdSize _) => unmodeled
   end.
 
