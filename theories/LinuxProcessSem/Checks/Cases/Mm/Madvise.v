@@ -56,7 +56,7 @@ Example madvise_unaligned_forged_success_rejected :
   = CheckReject.
 Proof. check_eq. Qed.
 
-(** Every advice value other than MADV_DONTNEED declines, including the
+(** Other advice values decline, including the
     ones Linux answers 0 with no effect (MADV_NORMAL) and the ones whose
     effect the model could not state (MADV_FREE).  A decline, never a
     guess: which values are even valid depends on the kernel

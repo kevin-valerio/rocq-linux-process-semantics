@@ -399,12 +399,14 @@ Definition MAP_FIXED_NOREPLACE : Z := 1048576%Z.  (* 0x100000 *)
 Definition MREMAP_MAYMOVE : Z := 1%Z.
 
 (** madvise advice values (asm-generic, as on riscv64):
-    [#define MADV_DONTNEED 4] (include/uapi/asm-generic/mman-common.h:49,
+    [#define MADV_DONTNEED 4] and [#define MADV_NOHUGEPAGE 15]
+    (include/uapi/asm-generic/mman-common.h,
     Linux v6.18.46).  Architecture-independent for the same reason the
     MREMAP_ bits are: riscv64 carries no uapi mman.h of its own, and the
     arch-generic mman.h defines no MADV_ value, so mman-common.h is the
-    sole definition.  [Mm.Madvise.madvise_dontneed_b] is the one reader. *)
+    sole definition.  [Mm.Madvise] reads these values. *)
 Definition MADV_DONTNEED : Z := 4%Z.
+Definition MADV_NOHUGEPAGE : Z := 15%Z.
 
 (** getrandom flag bits (include/uapi/linux/random.h). *)
 Definition GRND_NONBLOCK : Z := 1%Z.
