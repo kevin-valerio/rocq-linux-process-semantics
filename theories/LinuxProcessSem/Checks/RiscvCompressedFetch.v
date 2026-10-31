@@ -68,8 +68,8 @@ Definition st0 (segs : list Segment) (pc : word) : machine_state := {|
   ms_svc_pending := None;
   ms_resv := None; ms_fcsr := Z_to_bv 32 0;
   ms_mem := fun _ => None;
-  ms_rom := fun _ => None
-|}.
+  ms_rom := fun _ => None;
+  ms_ro := [] |}.
 
 (* ================================================================= *)
 (* THE FIX: a compressed instruction in the last 2 bytes of a segment *)
@@ -225,7 +225,7 @@ Example wx_overlay_shadows_fetch :
              ms_resv := None; ms_fcsr := Z_to_bv 32 0;
              ms_mem := write_to_mem (fun _ => None) (Z_to_bv 64 0x100)
                          [Z_to_bv 8 0x15; Z_to_bv 8 0x45];
-             ms_rom := fun _ => None |} with
+             ms_rom := fun _ => None; ms_ro := [] |} with
   | MachineOk ms' =>
       (bv_unsigned (ms_pc ms'), bv_unsigned (ms_gpr ms' 0))
   | _ => (0, 0)

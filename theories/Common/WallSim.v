@@ -419,7 +419,7 @@ Lemma twl_write_rec : forall (k : machine_state -> Prop) rest regs pc mem rom,
   reg_get regs 10 = fd ->
   ms_read_bytes {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                    ms_svc_pending := Some (getr regs 17); ms_resv := None;
-                   ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |}
+                   ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (reg_get regs 11) (reg_get regs 12) = Some rest ->
   (1 <= length rest)%nat ->
   (forall n, (1 <= n)%nat -> (n <= length rest)%nat ->
@@ -428,7 +428,7 @@ Lemma twl_write_rec : forall (k : machine_state -> Prop) rest regs pc mem rom,
        (skipn n rest) k) ->
   to_wall {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
              ms_svc_pending := Some (getr regs 17); ms_resv := None;
-             ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |}
+             ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     rest k.
 Proof.
   intros k rest regs pc mem rom H17 H10 Hr Hnb Hcont.

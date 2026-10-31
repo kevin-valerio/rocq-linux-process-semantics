@@ -617,20 +617,17 @@ Record SyscallInput := mkInput {
 Definition in_arg (i : SyscallInput) (k : nat) : word :=
   nth k (in_args i) (Z_to_bv 64 0).
 
-(** One symbolic memory copy.  Keeping the preserved prefix of a moved
-    anonymous mapping as three words, rather than materializing its bytes,
-    makes large [mremap] effects O(1). *)
-Record MemCopy := mkCopy {
-  copy_src : word;
-  copy_dst : word;
-  copy_len : word;
-}.
+(** Copy a memory range from the pre-effect snapshot, or protect a live
+    range as read-only.  The copy form keeps large [mremap] effects O(1). *)
+Inductive MemCopy : Type :=
+| mkCopy : word -> word -> word -> MemCopy
+| mkProtectRO : word -> word -> MemCopy.
 
 (** What a syscall does to the machine: the a0 return value, the byte
     ranges it writes into user memory, the ranges it ZERO-FILLS
     (anonymous grants, mprotect exposure, and mremap growth), the ranges it
-    UNMAPS (munmap, mremap, and PROT_NONE mappings), and the ranges it copies
-    from a pre-effect snapshot.
+    UNMAPS (munmap, mremap, and PROT_NONE mappings), and memory operations:
+    copies from a pre-effect snapshot or read-only permission changes.
     [Run.apply_effect] applies these deterministically; everything else
     (other GPRs, SP, PC, ROM, all other memory) is preserved by
     construction.
@@ -647,7 +644,7 @@ Record MemCopy := mkCopy {
     [Run.apply_effect] erases the
     ranges before zeros and writes are applied.
 
-    [eff_copies] snapshots its sources from the PRE-EFFECT memory.  This is
+    [eff_copies] snapshots copy sources from the PRE-EFFECT memory.  This is
     essential for a moved [mremap]: the old range is unmapped by the same
     effect, but its preserved prefix must still be installed at the new
     address.  [Run.apply_effect] applies unmaps, then zeros, then these
@@ -661,7 +658,7 @@ Record SyscallEffect := mkEffectU {
   eff_writes : list (word * list byte); (* (base address, bytes), applied in order *)
   eff_zeros  : list (word * word);      (* (base address, size) zero-filled ranges *)
   eff_unmaps : list (word * word);      (* (base address, size) unmapped ranges *)
-  eff_copies : list MemCopy;            (* pre-effect (source, destination, size) copies *)
+  eff_copies : list MemCopy;            (* copies or read-only range changes *)
   eff_copyins : list (word * nat)       (* ranges already read from user memory *)
 }.
 

@@ -279,12 +279,13 @@ Ltac wx_step_pipeline Hwx Hecall Hdecode :=
   rewrite Hdecode;
   cbv beta iota zeta delta
     [RiscvSemantics.interp_eff_accesses
+     RiscvSemantics.interp_eff_accesses_ro RiscvSemantics.ro_free
      RiscvSemantics.width_bytes RiscvSemantics.width_bytesZ
      Sem.exec Sem.load_val Sem.store_val
      Sem.rget Sem.rset Sem.with_regs Sem.with_pc Sem.with_resv
      Sem.inval_resv Sem.w0 Sem.w1
      Sem.c_regs Sem.c_fregs Sem.c_pc Sem.c_fcsr Sem.c_resv
-     ms_regs ms_pc_val ms_svc_pending ms_resv ms_mem ms_rom mkst];
+     ms_regs ms_pc_val ms_svc_pending ms_resv ms_mem ms_rom ms_ro mkst];
   rewrite ?bv_eqb0_is_x0.
 
 Section WithFP2.
@@ -473,7 +474,7 @@ Lemma step_ecall_wx : forall segs regs pc mem rom w,
   MachineOk {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                ms_svc_pending := Some (getr regs 17);
                ms_resv := None; ms_fcsr := fp_csr;
-               ms_mem := mem; ms_rom := rom |}.
+               ms_mem := mem; ms_rom := rom; ms_ro := [] |}.
 Proof.
   intros segs regs pc mem rom w [Hn Hov] Hecall.
   unfold RiscvSemantics.step, RiscvSemantics.step_accesses.

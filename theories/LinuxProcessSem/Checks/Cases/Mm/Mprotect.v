@@ -20,6 +20,26 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Cases Require Export
   Prelude Fs.ReadWrite.
 
+Definition readonly_image_model : Model :=
+  with_vmmaps
+    (mkVmMapsFull [(65536, 4096)] [] [] 0 0 16384 0 demo_sp)
+    noaccess_base.
+
+Definition readonly_image_input : SyscallInput :=
+  mkInput 226 [65536; 4096; 1; 0; 0; 0]
+    (fun _ => Some 0x5a) (fun _ => Some 0x5a).
+
+Example mprotect_readonly_image_accepts_success :
+  check_syscall readonly_image_input
+    (mkEffectU 0 [] [] [] [mkProtectRO 65536 4096] [])
+    readonly_image_model = CheckOk readonly_image_model [].
+Proof. check_eq. Qed.
+
+Example mprotect_readonly_image_rejects_missing_permission_change :
+  check_syscall readonly_image_input (mkEffect 0 [] [])
+    readonly_image_model = CheckReject.
+Proof. check_eq. Qed.
+
 Example mprotect_middle_splits_noaccess_and_zeros_exactly :
   check_syscall
     (mkInput 226 [69632; 4096; 3; 0; 0; 0]

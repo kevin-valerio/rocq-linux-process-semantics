@@ -692,35 +692,41 @@ Proof.
       rewrite u64 by lia. apply aligned_add; [exact Ealign | apply pu_aligned].
 Qed.
 
-Lemma check_mprotect_preserves_na : forall addr len prot eff m m' evs,
-  check_mprotect addr len prot eff m = CheckOk m' evs ->
+Lemma check_mprotect_preserves_na : forall addr len prot i eff m m' evs,
+  check_mprotect addr len prot i eff m = CheckOk m' evs ->
   vm_wf (m_vmmaps m) -> vm_fit (m_vmmaps m) ->
   na_inv (m_vmmaps m) -> na_inv (m_vmmaps m').
 Proof.
-  intros addr len prot [ret ws zs us cs ci] m m' evs H Hwf Hfit Hna.
+  intros addr len prot i [ret ws zs us cs ci] m m' evs H Hwf Hfit Hna.
   unfold check_mprotect in H. cbv zeta in H.
   dif H; [apply check_ret_only_model in H; subst m'; exact Hna|].
   difn H Ealign; [apply check_ret_only_model in H; subst m'; exact Hna|].
   difn H Elen; [apply check_ret_only_model in H; subst m'; exact Hna|].
   difn H Ebig; [apply check_ret_only_model in H; subst m'; exact Hna|].
-  dif H; [discriminate|].
   dif H.
-  - destruct ws, us, cs, ci; try discriminate.
-    dif H.
-    + destruct zs; [|discriminate]. injection H as <- <-. exact Hna.
-    + dif H; [|discriminate]. injection H as <- <-.
-      apply negb_false_iff, Z.eqb_eq in Ealign.
-      apply Z.leb_gt in Ebig. unfold two_pow_64 in Ebig.
-      pose proof (word_range addr) as Har. pose proof (word_range len) as Hlr.
-      pose proof (w_is0_false len Elen) as Hlen0.
-      assert (HnZ : (0 < page_round_up_Z (bv_unsigned len))%Z)
-        by (apply page_round_up_pos; lia).
-      unfold na_inv. rewrite vmm_mprotect_next. cbn [vm_maps vm_noaccess vm_brk].
-      apply na_inv_cut_na; [exact Ealign | | exact Hna].
-      rewrite u64 by lia. apply aligned_add; [exact Ealign | apply pu_aligned].
   - dif H; [|discriminate].
-    destruct ws, zs, us, cs, ci; try discriminate.
-    dif H; [|discriminate]. injection H as <- <-. exact Hna.
+    dif H; [|discriminate].
+    destruct ws, zs, us, ci; try discriminate.
+    dif H.
+    + destruct cs; [injection H as <- <-; exact Hna|discriminate].
+    + dif H; [injection H as <- <-; exact Hna|discriminate].
+  - dif H.
+    + destruct ws, us, cs, ci; try discriminate.
+      dif H.
+      * destruct zs; [|discriminate]. injection H as <- <-. exact Hna.
+      * dif H; [|discriminate]. injection H as <- <-.
+        apply negb_false_iff, Z.eqb_eq in Ealign.
+        apply Z.leb_gt in Ebig. unfold two_pow_64 in Ebig.
+        pose proof (word_range addr) as Har. pose proof (word_range len) as Hlr.
+        pose proof (w_is0_false len Elen) as Hlen0.
+        assert (HnZ : (0 < page_round_up_Z (bv_unsigned len))%Z)
+          by (apply page_round_up_pos; lia).
+        unfold na_inv. rewrite vmm_mprotect_next. cbn [vm_maps vm_noaccess vm_brk].
+        apply na_inv_cut_na; [exact Ealign | | exact Hna].
+        rewrite u64 by lia. apply aligned_add; [exact Ealign | apply pu_aligned].
+    + dif H; [|discriminate].
+      destruct ws, zs, us, cs, ci; try discriminate.
+      dif H; [|discriminate]. injection H as <- <-. exact Hna.
 Qed.
 
 Lemma check_mmap_preserves_na : forall addr len prot flags fd off eff m m' evs,

@@ -1014,8 +1014,8 @@ Defined.
 Definition arm_mprotect : CheckedArm.
 Proof.
   refine (mkCheckedArm (mkSpecArm 226%Z (fun i => mprotect_spec (in_arg i 0) (in_arg i 1) (in_arg i 2) i))
-                       (fun i eff m => check_mprotect (in_arg i 0) (in_arg i 1) (in_arg i 2) eff m)
-                       (fun i m => mprotect_witness (in_arg i 0) (in_arg i 1) (in_arg i 2) m)
+                       (fun i eff m => check_mprotect (in_arg i 0) (in_arg i 1) (in_arg i 2) i eff m)
+                       (fun i m => mprotect_witness (in_arg i 0) (in_arg i 1) (in_arg i 2) i m)
                        _ _ _ _ _);
     cbn [sa_spec sa_no]; intros;
     eauto using check_mprotect_sound_ok, check_mprotect_sound_unmodeled, check_mprotect_complete_ok, check_mprotect_complete_unmodeled, mprotect_witness_ok.
@@ -2078,10 +2078,10 @@ Lemma sa_spec_arm_mmap : forall i m o,
 Proof. reflexivity. Qed.
 
 Lemma ca_check_arm_mprotect : forall i eff m,
-  ca_check arm_mprotect i eff m = check_mprotect (in_arg i 0) (in_arg i 1) (in_arg i 2) eff m.
+  ca_check arm_mprotect i eff m = check_mprotect (in_arg i 0) (in_arg i 1) (in_arg i 2) i eff m.
 Proof. reflexivity. Qed.
 Lemma ca_witness_arm_mprotect : forall i m,
-  ca_witness arm_mprotect i m = mprotect_witness (in_arg i 0) (in_arg i 1) (in_arg i 2) m.
+  ca_witness arm_mprotect i m = mprotect_witness (in_arg i 0) (in_arg i 1) (in_arg i 2) i m.
 Proof. reflexivity. Qed.
 Lemma sa_spec_arm_mprotect : forall i m o,
   sa_spec (ca_arm arm_mprotect) i m o = mprotect_spec (in_arg i 0) (in_arg i 1) (in_arg i 2) i m o.

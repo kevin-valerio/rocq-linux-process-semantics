@@ -10,7 +10,7 @@
 
 From Stdlib Require Import ZArith NArith List String PrimString.
 From LinuxProcessSemantics.LinuxProcessSem Require Import
-  BvBase MemImageType RiscvSemantics.
+  BvBase MemImageType RiscvSemantics State Run.
 Import ListNotations.
 Open Scope bv_scope.
 Local Open Scope string_scope.
@@ -70,8 +70,8 @@ Definition access_state (pc : Z) (addr : Z) (resv : option word)
   ms_resv := resv;
   ms_fcsr := Z_to_bv 32 0;
   ms_mem := access_data;
-  ms_rom := fun _ => None
-|}.
+  ms_rom := fun _ => None;
+  ms_ro := [] |}.
 
 Definition reported_ranges (st : machine_state)
     : option (list memory_access) :=
@@ -138,6 +138,23 @@ Example cross_page_reports :
   reported_ranges (access_state 0x10c 0xffc None) = Some (access_at 0xffc 8) /\
   reported_ranges (access_state 0x11c 0xffc None) = Some (access_at 0xffc 8).
 Proof. vm_compute. repeat split. Qed.
+
+Definition protected_access_state (pc : Z) : machine_state :=
+  apply_effect (access_state pc 0x200 None)
+    (mkEffectU 0 [] [] [] [mkProtectRO 0x200 0x20] []).
+
+Example protected_bytes_remain_readable :
+  ms_read_byte (protected_access_state 0x100) 0x200 = Some 0x5a /\
+  reported_ranges (protected_access_state 0x100) = Some (access_at 0x200 1).
+Proof.
+  vm_compute. split; [f_equal; apply bv_eq; reflexivity|reflexivity].
+Qed.
+
+Example protected_bytes_reject_stores :
+  ms_writable_byte access_segments (protected_access_state 0x110) 0x200 = None /\
+  reported_ranges (protected_access_state 0x110) = None /\
+  reported_ranges (protected_access_state 0x140) = None.
+Proof. vm_compute. repeat split; reflexivity. Qed.
 
 (** Instruction fetches are deliberately absent: callers account only for
     successful DATA effects, while code remains governed by segment execute

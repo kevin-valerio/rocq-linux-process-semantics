@@ -449,14 +449,14 @@ Lemma tfm_open_rd_rec : forall regs pc mem model p d
                      /\ fd = alloc_fd (m_fds model) /\ Ts fd o))) ->
   to_fout_mix {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                  ms_svc_pending := Some (getr regs 17);
-                 ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}
+                 ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}
               model U.
 Proof.
   intros regs pc mem model p d Te Ts U
     H17 H10 H12 Hpath Hpe Hdot Hfs Hh Hlazy Herr Hok HU.
   set (ms := {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                 ms_svc_pending := Some (getr regs 17);
-                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}).
+                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}).
   apply (tfm_open_core ms model
            (fun fd => with_fds (fd_insert (m_fds model) fd
                                   (FdFile p (Z_to_bv 64 0))) model)
@@ -511,14 +511,14 @@ Lemma tfm_open_wr_rec : forall regs pc mem model p
                      /\ fd = alloc_fd (m_fds model) /\ Ts fd o))) ->
   to_fout_mix {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                  ms_svc_pending := Some (getr regs 17);
-                 ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}
+                 ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}
               model U.
 Proof.
   intros regs pc mem model p Te Ts U
     H17 H10 H12 Hpath Hpe Hdot Hun Hh Hlazy Herr Hok HU.
   set (ms := {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                 ms_svc_pending := Some (getr regs 17);
-                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}).
+                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}).
   apply (tfm_open_core ms model
            (fun fd => with_fds (fd_insert (m_fds model) fd
                                   (FdFileW p (Z_to_bv 64 0)))

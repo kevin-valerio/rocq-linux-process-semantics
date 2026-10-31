@@ -38,7 +38,7 @@ Definition mkstR (regs : bvmap 5 word) (pc : word) (mem rom : word -> option byt
     : machine_state :=
   {| ms_regs := regs; ms_fregs := bvmap_empty; ms_pc_val := pc;
      ms_svc_pending := None; ms_resv := rv; ms_fcsr := Z_to_bv 32 0;
-     ms_mem := mem; ms_rom := rom |}.
+     ms_mem := mem; ms_rom := rom; ms_ro := [] |}.
 
 Lemma mkstR_None : forall regs pc mem rom, mkstR regs pc mem rom None = mkst regs pc mem rom.
 Proof. reflexivity. Qed.

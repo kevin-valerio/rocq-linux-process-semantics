@@ -207,7 +207,7 @@ Proof.
   intros fuel ms Hsvc Hfetch Hcheck Hcode.
   set (ms1 := {| ms_regs := ms_regs ms; ms_fregs := ms_fregs ms; ms_pc_val := ms_pc_val ms;
                  ms_svc_pending := Some (ms_reg ms 17); ms_resv := ms_resv ms; ms_fcsr := ms_fcsr ms;
-                 ms_mem := ms_mem ms; ms_rom := ms_rom ms |}).
+                 ms_mem := ms_mem ms; ms_rom := ms_rom ms; ms_ro := ms_ro ms |}).
   apply (sim_step (S fuel) ms ms1 Hsvc).
   - change (drop_access_report (step_accesses segs ms) = MachineOk ms1).
     unfold step_accesses. rewrite Hfetch. unfold ms1. reflexivity.
@@ -624,7 +624,7 @@ Qed.
 Lemma machine_state_eta : forall ms : machine_state,
   ms = {| ms_regs := ms_regs ms; ms_fregs := ms_fregs ms; ms_pc_val := ms_pc_val ms;
           ms_svc_pending := ms_svc_pending ms; ms_resv := ms_resv ms; ms_fcsr := ms_fcsr ms;
-          ms_mem := ms_mem ms; ms_rom := ms_rom ms |}.
+          ms_mem := ms_mem ms; ms_rom := ms_rom ms; ms_ro := ms_ro ms |}.
 Proof. intros []; reflexivity. Qed.
 
 (** The "enumeration state": structural fields from the (argv-independent)
@@ -638,7 +638,7 @@ Definition enum_state (segs : list Segment) (init_pc : N) (ph : PhdrInfo)
      ms_svc_pending := ms_svc_pending (init_machine_state segs init_pc ph init_sp init_rnd nil nil uid hw);
      ms_resv       := ms_resv (init_machine_state segs init_pc ph init_sp init_rnd nil nil uid hw); ms_fcsr := ms_fcsr (init_machine_state segs init_pc ph init_sp init_rnd nil nil uid hw);
      ms_mem        := overlay_argc_bytes init_sp argc base;
-     ms_rom        := ms_rom (init_machine_state segs init_pc ph init_sp init_rnd nil nil uid hw) |}.
+     ms_rom        := ms_rom (init_machine_state segs init_pc ph init_sp init_rnd nil nil uid hw); ms_ro := [] |}.
 
 (** Bridge: the real initial state equals the enumeration state at
     [argc := length argv] and [base := its own memory]. *)

@@ -600,12 +600,12 @@ Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_mprotect : forall i eff m,
   bv_unsigned (in_sysno i) = 226%Z ->
-  check_syscall i eff m = check_mprotect (in_arg i 0) (in_arg i 1) (in_arg i 2) eff m.
+  check_syscall i eff m = check_mprotect (in_arg i 0) (in_arg i 1) (in_arg i 2) i eff m.
 Proof. intros i eff m H. unfold check_syscall. rewrite H. reflexivity. Qed.
 
 Lemma syscall_witness_mprotect : forall i m,
   bv_unsigned (in_sysno i) = 226%Z ->
-  syscall_spec_witness i m = mprotect_witness (in_arg i 0) (in_arg i 1) (in_arg i 2) m.
+  syscall_spec_witness i m = mprotect_witness (in_arg i 0) (in_arg i 1) (in_arg i 2) i m.
 Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_madvise : forall i eff m,

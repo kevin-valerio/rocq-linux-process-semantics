@@ -133,7 +133,7 @@ Qed.
 Definition with_mem (ms : machine_state) (mem : word -> option byte) : machine_state :=
   {| ms_regs := ms_regs ms; ms_fregs := ms_fregs ms; ms_pc_val := ms_pc_val ms;
      ms_svc_pending := ms_svc_pending ms; ms_resv := ms_resv ms; ms_fcsr := ms_fcsr ms;
-     ms_mem := mem; ms_rom := ms_rom ms |}.
+     ms_mem := mem; ms_rom := ms_rom ms; ms_ro := ms_ro ms |}.
 
 Lemma with_mem_eta : forall ms, ms = with_mem ms (ms_mem ms).
 Proof. intros []; reflexivity. Qed.

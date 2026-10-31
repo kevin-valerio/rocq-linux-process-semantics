@@ -370,7 +370,7 @@ Definition ecall_st (regs : bvmap 5 word) (pc : word) (mem rom : word -> option 
     : machine_state :=
   {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
      ms_svc_pending := Some (getr regs 17);
-     ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |}.
+     ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |}.
 
 Lemma step_ecall_st : forall segs regs pc mem rom w,
   fetch_word segs pc = Some w -> is_ecall w = true ->

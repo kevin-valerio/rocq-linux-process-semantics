@@ -134,6 +134,7 @@ Ltac fp_pipeline Hfetch Hecall Hdecode :=
   rewrite Hdecode;
   cbv beta iota zeta delta
     [RiscvSemantics.interp_eff_accesses
+     RiscvSemantics.interp_eff_accesses_ro RiscvSemantics.ro_free
      RiscvSemantics.width_bytes RiscvSemantics.width_bytesZ
      Sem.exec Sem.load_val Sem.store_val Sem.exec_csr
      Sem.rget Sem.rset Sem.with_regs Sem.with_pc Sem.with_resv
@@ -142,7 +143,7 @@ Ltac fp_pipeline Hfetch Hecall Hdecode :=
      Sem.inval_resv Sem.w0 Sem.w1
      Sem.c_regs Sem.c_fregs Sem.c_pc Sem.c_fcsr Sem.c_resv
      RiscvSemantics.access_value RiscvSemantics.drop_access_report
-     ms_regs ms_fregs ms_fcsr ms_pc_val ms_svc_pending ms_resv ms_mem ms_rom mkst fp_regs fp_csr];
+     ms_regs ms_fregs ms_fcsr ms_pc_val ms_svc_pending ms_resv ms_mem ms_rom ms_ro mkst fp_regs fp_csr];
   rewrite ?bv_eqb0_is_x0.
 
 (* ===================================================================== *)

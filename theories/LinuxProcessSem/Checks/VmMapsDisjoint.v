@@ -1214,26 +1214,32 @@ Proof.
       exact Hwf.
 Qed.
 
-Lemma check_mprotect_preserves : forall addr len prot eff m m' evs,
-  check_mprotect addr len prot eff m = CheckOk m' evs ->
+Lemma check_mprotect_preserves : forall addr len prot i eff m m' evs,
+  check_mprotect addr len prot i eff m = CheckOk m' evs ->
   vm_wf (m_vmmaps m) -> vm_wf (m_vmmaps m').
 Proof.
-  intros addr len prot [ret ws zs us cs ci] m m' evs H Hwf.
+  intros addr len prot i [ret ws zs us cs ci] m m' evs H Hwf.
   unfold check_mprotect in H. cbv zeta in H.
   dif H; [apply check_ret_only_model in H; subst m'; exact Hwf|].
   dif H; [apply check_ret_only_model in H; subst m'; exact Hwf|].
   dif H; [apply check_ret_only_model in H; subst m'; exact Hwf|].
   dif H; [apply check_ret_only_model in H; subst m'; exact Hwf|].
-  dif H; [discriminate|].
   dif H.
-  - destruct ws, us, cs, ci; try discriminate.
-    dif H.
-    + destruct zs; [|discriminate]. injection H as <- <-. exact Hwf.
-    + dif H; [|discriminate]. injection H as <- <-.
-      unfold vm_wf. rewrite vmm_mprotect_next. cbn [vm_maps]. exact Hwf.
   - dif H; [|discriminate].
-    destruct ws, zs, us, cs, ci; try discriminate.
-    dif H; [|discriminate]. injection H as <- <-. exact Hwf.
+    dif H; [|discriminate].
+    destruct ws, zs, us, ci; try discriminate.
+    dif H.
+    + destruct cs; [injection H as <- <-; exact Hwf|discriminate].
+    + dif H; [injection H as <- <-; exact Hwf|discriminate].
+  - dif H.
+    + destruct ws, us, cs, ci; try discriminate.
+      dif H.
+      * destruct zs; [|discriminate]. injection H as <- <-. exact Hwf.
+      * dif H; [|discriminate]. injection H as <- <-.
+        unfold vm_wf. rewrite vmm_mprotect_next. cbn [vm_maps]. exact Hwf.
+    + dif H; [|discriminate].
+      destruct ws, zs, us, cs, ci; try discriminate.
+      dif H; [|discriminate]. injection H as <- <-. exact Hwf.
 Qed.
 
 (** [madvise] never touches [vm_maps]: its one state change is to the
@@ -1246,12 +1252,21 @@ Proof.
   intros addr len advice [ret ws zs us cs ci] m m' evs H.
   unfold check_madvise in H. cbv zeta in H.
   dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
-  dif H; [discriminate|].
-  dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
-  dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
-  dif H; [|discriminate].
-  destruct ws, us, cs, ci; try discriminate.
-  dif H; [|discriminate]. injection H as <- <-. apply vmm_madvise_next.
+  dif H.
+  - unfold check_madvise_nohuge in H.
+    dif H.
+    + unfold check_madvise_nohuge_result in H.
+      dif H; [apply check_ret_only_model in H; subst m'; reflexivity|discriminate].
+    + dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
+      dif H; [|discriminate].
+      unfold check_madvise_nohuge_result in H.
+      dif H; [apply check_ret_only_model in H; subst m'; reflexivity|discriminate].
+  - dif H; [discriminate|].
+    dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
+    dif H; [apply check_ret_only_model in H; subst m'; reflexivity|].
+    dif H; [|discriminate].
+    destruct ws, us, cs, ci; try discriminate.
+    dif H; [|discriminate]. injection H as <- <-. apply vmm_madvise_next.
 Qed.
 
 Lemma check_mmap_preserves : forall addr len prot flags fd off eff m m' evs,
