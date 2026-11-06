@@ -3262,10 +3262,10 @@ Record ProcState := mkProcState {
                                     purpose: setting it would decline calls
                                     the model can still answer.  What the
                                     invariant says is that while it is [false]
-                                    the record is (NULL, 0, F) for some flags
-                                    word F this model does not track, and
-                                    every arm of the spec answers the same for
-                                    every F. *)
+                                    the record is (NULL, 0, F).  The model
+                                    tracks F's SS_AUTODISARM bit for old-stack
+                                    queries and declines the fast path that
+                                    needs the full word. *)
 ;
   procst_killed : bool           (* whether the halt above is a DEATH BY SIGNAL
                                     rather than an exit.  The process was
@@ -3400,6 +3400,12 @@ Record ProcState := mkProcState {
     (* The extension and scalar misaligned performance words returned by
        riscv_hwprobe for all online CPUs.  The launch input fixes them for
        the run, as it fixes AT_HWCAP.  None leaves this query unmodeled. *)
+;
+  procst_sigaltstack_autodisarm : bool
+    (* The SS_AUTODISARM bit retained across execve while the alternate
+       stack's size and address are reset.  The launch input supplies it;
+       a successful sigaltstack disable replaces it with the caller's bit.
+       Old-stack queries report this same bit on every call. *)
 }.
 
 (** The resource limits the process has been observed to have. *)
@@ -3525,6 +3531,8 @@ Definition m_setsid_succeeded (m : Model) : bool :=
 Definition m_has_children (m : Model) : bool := procst_children (m_proc m).
 Definition m_sigaltstack_installed (m : Model) : bool :=
   procst_sigaltstack_installed (m_proc m).
+Definition m_sigaltstack_autodisarm (m : Model) : bool :=
+  procst_sigaltstack_autodisarm (m_proc m).
 Definition m_sigmask (m : Model) : word := procst_sigmask (m_proc m).
 (** The signal that killed the process, or [None] if it exited or is
     still running.  READ THROUGH [procst_halted] on purpose: the payload
@@ -3592,7 +3600,7 @@ Definition mkModel (fds : list (word * FdEntry)) (vm : VmMaps)
             (mkProcState halted tid
                (mkCreds overflow_id overflow_id overflow_id
                         overflow_id overflow_id overflow_id [])
-               false (Z_to_bv 64 0) false None false false false false [] None None)
+               false (Z_to_bv 64 0) false None false false false false [] None None false)
             (mkLimState rlim None default_nofile None)
             (mkTimeState (Z_to_bv 64 0)).
 
@@ -3667,7 +3675,8 @@ Definition with_fs (fs : Fs.Fs) (m : Model) : Model :=
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
                          (m_abort_terminal m)
-                         (statpins_restrict fs (m_statpins m)) (m_affinity_size m) (m_hwprobe m))
+                         (statpins_restrict fs (m_statpins m)) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 
 Definition with_proc_maps (data : option (list byte)) (m : Model) : Model :=
@@ -3687,7 +3696,8 @@ Definition with_halted (code : word) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          false (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 Definition with_tid (tid : word) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
@@ -3696,7 +3706,8 @@ Definition with_tid (tid : word) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 Definition with_affinity_size (n : nat) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
@@ -3705,7 +3716,8 @@ Definition with_affinity_size (n : nat) (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m) (Some n) (m_hwprobe m))
+                         (m_abort_terminal m) (m_statpins m) (Some n) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 Definition with_rlimit_core (bs : list byte) (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
@@ -3736,7 +3748,8 @@ Definition with_utsname (bs : list byte) (m : Model) : Model :=
                          (m_has_children m) (Some bs)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 (** Look a file's stat pin up by path.  [None] means no [fstat] has
     delivered a [struct stat] for that file yet, which is the branch
@@ -3772,7 +3785,8 @@ Definition with_statpin (p : Fs.path) (bs : list byte) (m : Model) : Model :=
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
                          (m_abort_terminal m)
-                         ((p, bs) :: m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         ((p, bs) :: m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 
 (** Seed the inherited soft descriptor limit.  [init_model] is the only
@@ -3794,7 +3808,8 @@ Definition with_abort_terminal (b : bool) (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m) b
-                         (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         (m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 
 (** Install the hardware probe snapshot supplied by [ProcInput]. *)
@@ -3805,7 +3820,8 @@ Definition with_hwprobe (h : option (word * word)) (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) h)
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) h
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 
 Definition with_nofile (n : word) (m : Model) : Model :=
@@ -3822,7 +3838,8 @@ Definition with_creds (c : Creds) (m : Model) : Model :=
                          (procst_children (m_proc m)) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 Definition with_setsid_succeeded (m : Model) : Model :=
   mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
@@ -3830,7 +3847,8 @@ Definition with_setsid_succeeded (m : Model) : Model :=
                          true (m_sigmask m) (procst_children (m_proc m))
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 
 (** Record that the process now has something to reap.
@@ -3856,7 +3874,8 @@ Definition with_children (m : Model) : Model :=
                          (m_setsid_succeeded m) (m_sigmask m) true
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 (** Install a new blocked mask.  [Kernel.Signal.rt_sigprocmask_spec] is
     the only caller, and the only kernel path that reaches
@@ -3876,7 +3895,8 @@ Definition with_sigmask (s : word) (m : Model) : Model :=
                          (m_setsid_succeeded m) s (m_has_children m)
                          (m_utsname m) (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 
 (** Record that a [sigaltstack] has installed an alternate stack.
@@ -3903,7 +3923,19 @@ Definition with_sigaltstack_installed (m : Model) : Model :=
                          (m_setsid_succeeded m) (m_sigmask m)
                          (m_has_children m) (m_utsname m) true
                          (procst_killed (m_proc m)) (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
+            (m_lim m) (m_time m).
+
+Definition with_sigaltstack_autodisarm (b : bool) (m : Model) : Model :=
+  mkModelOf (m_fd m) (m_vm m) (m_io m) (m_fsys m)
+            (mkProcState (m_halted m) (m_tid m) (m_creds m)
+                         (m_setsid_succeeded m) (m_sigmask m)
+                         (m_has_children m) (m_utsname m)
+                         (m_sigaltstack_installed m)
+                         (procst_killed (m_proc m)) (m_sigabrt_pending m)
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m)
+                         (m_hwprobe m) b)
             (m_lim m) (m_time m).
 
 (** Record that SIGABRT has been sent and is BLOCKED, so it waits in
@@ -3928,7 +3960,8 @@ Definition with_sigabrt_pending (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          (procst_killed (m_proc m)) true (m_abort_terminal m)
-                         (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         (m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 
 (** End the process by a fatal signal.  It writes the signal number into
@@ -3958,7 +3991,8 @@ Definition with_killed (sig : word) (m : Model) : Model :=
                          (m_has_children m) (m_utsname m)
                          (m_sigaltstack_installed m)
                          true (m_sigabrt_pending m)
-                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m))
+                         (m_abort_terminal m) (m_statpins m) (m_affinity_size m) (m_hwprobe m)
+                         (m_sigaltstack_autodisarm m))
             (m_lim m) (m_time m).
 
 (** The invariant the two fields are written under, stated where the
@@ -5383,15 +5417,21 @@ Record ProcInput := mkProcInput_full {
   in_hwprobe : option (word * word)
     (* The stable response to a two-key riscv_hwprobe query for all online
        CPUs: IMA_EXT_0 and CPUPERF_0.  None declines the query. *)
+;
+  in_sigaltstack_autodisarm : bool
+    (* The inherited SS_AUTODISARM bit in sas_ss_flags after execve.
+       Both values are valid process inputs. *)
 }.
 
-(** THE POSITIONAL-LITERAL FORM: every field except the four ENVIRONMENT
-    fields at the end of the record ([in_urandom], [in_tmp], [in_proc_maps], [in_hwprobe]).
+(** THE POSITIONAL-LITERAL FORM: every field except the five ENVIRONMENT
+    fields at the end of the record ([in_urandom], [in_tmp], [in_proc_maps],
+    [in_hwprobe], [in_sigaltstack_autodisarm]).
 
     The record's own constructor is [mkProcInput_full] and takes every
     field.  This takes the first thirteen, in that order,
-    and fills the last four with THE DEFAULT RANDOM STREAM,
-    THE EMPTY /tmp, NO MAPS SNAPSHOT, and NO HARDWARE PROBE RESPONSE:
+    and fills the last five with THE DEFAULT RANDOM STREAM,
+    THE EMPTY /tmp, NO MAPS SNAPSHOT, NO HARDWARE PROBE RESPONSE,
+    and an unset SS_AUTODISARM bit:
     [default_urandom] is zero bytes
     forever, and a private /tmp starts empty.  So a literal written through this
     name denotes an input in an environment
@@ -5420,7 +5460,7 @@ Definition mkProcInput
     (nofile sigmask hwcap : word) (abort_terminal : bool)
     (va_size : VaSize) : ProcInput :=
   mkProcInput_full argv envp image_fs stdin uid gid groups net
-    nofile sigmask hwcap abort_terminal va_size default_urandom [] None None.
+    nofile sigmask hwcap abort_terminal va_size default_urandom [] None None false.
 
 (** THE FILE SYSTEM THE RUN STARTS WITH: the image, with the run's
     declared private /tmp seeded into it under absolute keys.
@@ -5486,6 +5526,7 @@ Definition init_model (reserved : list (word * word)) (brk0 mbase sp : word)
     (lim : Z) (inp : ProcInput) : Model :=
   with_proc_maps (in_proc_maps inp)
   (with_hwprobe (in_hwprobe inp)
+  (with_sigaltstack_autodisarm (in_sigaltstack_autodisarm inp)
   (with_abort_terminal (in_abort_terminal inp)
   (with_sigmask (in_sigmask inp)
   (with_nofile (in_nofile inp)
@@ -5503,7 +5544,7 @@ Definition init_model (reserved : list (word * word)) (brk0 mbase sp : word)
        (in_fs inp)
        None
        None
-       None)))))))).
+       None))))))))).
 
 (** The base case of the nonemptiness invariant: a run starts with NO
     protected range at all.  Every reachable [vm_noaccess] is therefore
@@ -8183,9 +8224,32 @@ Lemma m_sigaltstack_installed_with_abort_terminal : forall (v : bool) (m : Model
 Proof. reflexivity. Qed.
 #[export] Hint Rewrite m_sigaltstack_installed_with_abort_terminal : model.
 
+Lemma m_sigaltstack_autodisarm_with_bit : forall b m,
+  m_sigaltstack_autodisarm (with_sigaltstack_autodisarm b m) = b.
+Proof. reflexivity. Qed.
+#[export] Hint Rewrite m_sigaltstack_autodisarm_with_bit : model.
+
+Lemma m_sigaltstack_installed_with_autodisarm : forall b m,
+  m_sigaltstack_installed (with_sigaltstack_autodisarm b m) =
+  m_sigaltstack_installed m.
+Proof. reflexivity. Qed.
+#[export] Hint Rewrite m_sigaltstack_installed_with_autodisarm : model.
+
+Lemma m_sigaltstack_autodisarm_with_installed : forall m,
+  m_sigaltstack_autodisarm (with_sigaltstack_installed m) =
+  m_sigaltstack_autodisarm m.
+Proof. reflexivity. Qed.
+#[export] Hint Rewrite m_sigaltstack_autodisarm_with_installed : model.
+
 Lemma m_sigaltstack_installed_init_model : forall reserved brk0 mbase sp lim inp,
   m_sigaltstack_installed (init_model reserved brk0 mbase sp lim inp) = false.
 Proof. reflexivity. Qed.
+
+Lemma m_sigaltstack_autodisarm_init_model : forall reserved brk0 mbase sp lim inp,
+  m_sigaltstack_autodisarm (init_model reserved brk0 mbase sp lim inp) =
+  in_sigaltstack_autodisarm inp.
+Proof. reflexivity. Qed.
+#[export] Hint Rewrite m_sigaltstack_autodisarm_init_model : model.
 
 Lemma m_fds_init_model : forall reserved brk0 mbase sp lim inp,
   m_fds (init_model reserved brk0 mbase sp lim inp) =

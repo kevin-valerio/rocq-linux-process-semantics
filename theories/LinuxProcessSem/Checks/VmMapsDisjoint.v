@@ -2237,15 +2237,49 @@ Proof.
   intros eff m m' evs H. unfold check_sched_yield in H. vm_frame2 H.
 Qed.
 
-(** sigaltstack answers a bare return on every arm, and the one arm that
-    moves the model hands back [with_sigaltstack_installed m], which
-    rebuilds the process state alone. *)
+(** The old-stack query writes user memory, but its model stays in place. *)
+Lemma check_ss_oldstack_frame : forall i uoss bit eff m m' evs,
+  check_ss_oldstack i uoss bit eff m = CheckOk m' evs ->
+  m_vmmaps m' = m_vmmaps m.
+Proof.
+  intros i uoss bit eff m m' evs H.
+  unfold check_ss_oldstack in H.
+  destruct (negb (access_okb uoss SIGALTSTACK_BYTES)).
+  - apply check_ret_only_ok_iff in H as (_ & -> & _). reflexivity.
+  - destruct (read_bytes_map (in_wmem i) uoss
+                (Z_to_bv 64 SIGALTSTACK_BYTES)); [|discriminate].
+    destruct eff as [ret ws zs us cs cin].
+    destruct ws as [|[a bs] ws]; [discriminate|].
+    destruct ws, zs, us, cs, cin; try discriminate.
+    destruct (bv_eqb ret (Z_to_bv 64 0) && bv_eqb a uoss &&
+              ss_oldstack_shapeb bit bs); [|discriminate].
+    inversion H; subst. reflexivity.
+Qed.
+
+(** Installing or disabling a stack changes only process state. *)
 Lemma check_sigaltstack_frame : forall i uss uoss eff m m' evs,
   check_sigaltstack i uss uoss eff m = CheckOk m' evs ->
   m_vmmaps m' = m_vmmaps m.
 Proof.
   intros i uss uoss eff m m' evs H.
-  unfold check_sigaltstack in H. vm_frame2 H.
+  unfold check_sigaltstack in H.
+  destruct (m_sigaltstack_installed m); [discriminate|].
+  destruct (negb (w_is0 uoss)).
+  { destruct (negb (w_is0 uss)); [discriminate|].
+    eapply check_ss_oldstack_frame; exact H. }
+  destruct (w_is0 uss).
+  { apply check_ret_only_ok_iff in H as (_ & -> & _). reflexivity. }
+  destruct (sigaltstack_at (in_mem i) uss) as [bs|].
+  2:{ apply check_ret_only_ok_iff in H as (_ & -> & _). reflexivity. }
+  destruct (negb (ss_mode_ok (ss_flags_of bs))).
+  { apply check_ret_only_ok_iff in H as (_ & -> & _). reflexivity. }
+  destruct (ss_disabling (ss_flags_of bs)).
+  { apply check_ret_only_ok_iff in H as (_ & -> & _). reflexivity. }
+  destruct (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool;
+    [discriminate|].
+  destruct (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z.
+  - apply check_ret_only_ok_iff in H as (_ & -> & _). reflexivity.
+  - apply check_ret_only_ok_iff in H as (_ & -> & _). reflexivity.
 Qed.
 
 Lemma check_rt_sigaction_frame : forall i sig act oact ss eff m m' evs,

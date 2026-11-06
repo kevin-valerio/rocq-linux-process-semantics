@@ -397,8 +397,9 @@ Definition finite_input (inp : ProcInput) : Prop :=
 (** A process input with the standard-input stream and the random
     device's stream each replaced by the list of bytes it delivers.
     Field-for-field [State.ProcInput] — SAME NAMES IN THE SAME ORDER,
-    including the three ENVIRONMENT fields [State.in_urandom],
-    [State.in_tmp], and [State.in_proc_maps] at the end — with
+    including the environment fields [State.in_urandom], [State.in_tmp],
+    [State.in_proc_maps], [State.in_hwprobe], and
+    [State.in_sigaltstack_autodisarm] at the end — with
     [fin_stdin] and [fin_urandom] the
     two that differ in TYPE: inductive where the original is
     coinductive, which is the reason this record exists (see the header:
@@ -449,7 +450,7 @@ Definition finite_input (inp : ProcInput) : Prop :=
     literal over one reads across to the other; [to_proc_input] is the
     only conversion, and it goes one way.  It builds through
     [State.mkProcInput_full] rather than the thirteen-place
-    [State.mkProcInput], since it supplies both environment fields. *)
+    [State.mkProcInput], since it supplies every environment field. *)
 Record FinProcInput := mkFinProcInput {
   fin_argv  : list (list byte);
   fin_envp  : list (list byte);
@@ -492,7 +493,9 @@ Record FinProcInput := mkFinProcInput {
     (* the declared proc maps snapshot, also finite and outside
        [fin_core] *);
   fin_hwprobe : option (word * word)
-    (* the fixed hardware probe response, mirroring [State.in_hwprobe] *)
+    (* the fixed hardware probe response, mirroring [State.in_hwprobe] *);
+  fin_sigaltstack_autodisarm : bool
+    (* the inherited SS_AUTODISARM bit, mirroring [State.in_sigaltstack_autodisarm] *)
 }.
 
 (** The process input a [FinProcInput] denotes.  Built with
@@ -506,7 +509,7 @@ Definition to_proc_input (f : FinProcInput) : ProcInput :=
               (fin_nofile f) (fin_sigmask f) (fin_hwcap f)
               (fin_abort_terminal f) (fin_va_size f)
               (stream_of_list_then (fin_urandom f) State.default_urandom)
-              (fin_tmp f) (fin_proc_maps f) (fin_hwprobe f).
+              (fin_tmp f) (fin_proc_maps f) (fin_hwprobe f) (fin_sigaltstack_autodisarm f).
 
 (** Validity of a finite input is validity of the input it denotes —
     [Run.valid_input] and nothing else.  Deliberately not a new
@@ -608,7 +611,7 @@ Definition fin_core (f : FinProcInput) : FinCore :=
   mkFinCore (fin_argv f) (fin_envp f) (fin_image_fs f) (fin_stdin f).
 
 (** The core forgets the LAUNCH ENVIRONMENT and nothing else: the core
-    together with the seven environment fields determines the record.
+    together with the environment fields determines the record.
     This is what makes "the input proper, quotiented by the launch
     environment" an accurate description of [fin_core] rather than a
     hopeful one, and it is the statement to re-check if a future field
@@ -664,17 +667,19 @@ Lemma fin_core_env_eq : forall f g,
   fin_sigmask f = fin_sigmask g ->
   fin_hwcap f = fin_hwcap g ->
   fin_hwprobe f = fin_hwprobe g ->
+  fin_sigaltstack_autodisarm f = fin_sigaltstack_autodisarm g ->
   fin_abort_terminal f = fin_abort_terminal g ->
   fin_va_size f = fin_va_size g ->
   f = g.
 Proof.
-  intros [a1 e1 fs1 s1 u1 g1 gs1 n1 nf1 sm1 hc1 ab1 va1 r1 tm1 pm1 hp1]
-         [a2 e2 fs2 s2 u2 g2 gs2 n2 nf2 sm2 hc2 ab2 va2 r2 tm2 pm2 hp2]
-    Hcore Hpm Htm Hr Hu Hg Hgs Hn Hnf Hsm Hhc Hhp Hab Hva.
+  intros [a1 e1 fs1 s1 u1 g1 gs1 n1 nf1 sm1 hc1 ab1 va1 r1 tm1 pm1 hp1 ad1]
+         [a2 e2 fs2 s2 u2 g2 gs2 n2 nf2 sm2 hc2 ab2 va2 r2 tm2 pm2 hp2 ad2]
+    Hcore Hpm Htm Hr Hu Hg Hgs Hn Hnf Hsm Hhc Hhp Had Hab Hva.
   unfold fin_core in Hcore.
   cbn [fin_argv fin_envp fin_image_fs fin_tmp fin_stdin fin_urandom fin_uid fin_gid fin_groups fin_net
-       fin_nofile fin_sigmask fin_hwcap fin_abort_terminal fin_va_size fin_proc_maps fin_hwprobe]
-    in Hcore, Hpm, Htm, Hr, Hu, Hg, Hgs, Hn, Hnf, Hsm, Hhc, Hhp, Hab, Hva.
+       fin_nofile fin_sigmask fin_hwcap fin_abort_terminal fin_va_size fin_proc_maps fin_hwprobe
+       fin_sigaltstack_autodisarm]
+    in Hcore, Hpm, Htm, Hr, Hu, Hg, Hgs, Hn, Hnf, Hsm, Hhc, Hhp, Had, Hab, Hva.
   injection Hcore as Ha He Hfs Hs.
   subst. reflexivity.
 Qed.
@@ -719,7 +724,7 @@ Proof.
                      (repeat (Z_to_bv 64 0) n) (fin_net f) (fin_nofile f) (fin_sigmask f)
                      (fin_hwcap f)
                      (fin_abort_terminal f) (fin_va_size f)
-                     (fin_urandom f) (fin_tmp f) (fin_proc_maps f) (fin_hwprobe f)).
+                     (fin_urandom f) (fin_tmp f) (fin_proc_maps f) (fin_hwprobe f) (fin_sigaltstack_autodisarm f)).
   split; [| split].
   - intros n. reflexivity.
   - intros m n Heq.
@@ -775,17 +780,18 @@ Lemma to_proc_input_inj : forall f g,
   fin_urandom f = fin_urandom g ->
   f = g.
 Proof.
-  intros [a1 e1 fs1 s1 u1 g1 gs1 n1 nf1 sm1 hc1 ab1 va1 r1 tm1 pm1 hp1]
-         [a2 e2 fs2 s2 u2 g2 gs2 n2 nf2 sm2 hc2 ab2 va2 r2 tm2 pm2 hp2] H Hr.
+  intros [a1 e1 fs1 s1 u1 g1 gs1 n1 nf1 sm1 hc1 ab1 va1 r1 tm1 pm1 hp1 ad1]
+         [a2 e2 fs2 s2 u2 g2 gs2 n2 nf2 sm2 hc2 ab2 va2 r2 tm2 pm2 hp2 ad2] H Hr.
   cbn [fin_urandom] in Hr.
   unfold to_proc_input in H.
   cbn [fin_argv fin_envp fin_image_fs fin_tmp fin_stdin fin_urandom fin_uid fin_gid fin_groups fin_net
        fin_nofile fin_sigmask]
     in H.
-  (* the constructor's order, with the three ENVIRONMENT fields last:
+  (* the constructor's order, with the environment fields last:
      argv, envp, image, stdin, the ids, the queue, the limits, the
-     declarations, then [in_urandom], [in_tmp], [in_proc_maps], and [in_hwprobe] *)
-  injection H as Ha He Hfs Hs Hu Hg Hgs Hn Hnf Hsm Hhc Hab Hva _ Htm Hpm Hhp.
+     declarations, then [in_urandom], [in_tmp], [in_proc_maps],
+     [in_hwprobe], and [in_sigaltstack_autodisarm] *)
+  injection H as Ha He Hfs Hs Hu Hg Hgs Hn Hnf Hsm Hhc Hab Hva _ Htm Hpm Hhp Had.
   apply stream_of_list_inj in Hs.
   subst. reflexivity.
 Qed.
@@ -799,12 +805,12 @@ Lemma to_proc_input_not_inj :
 Proof.
   pose (base := mkFinProcInput [] [] []
                   [] (Z_to_bv 64 0) (Z_to_bv 64 0) [] net_silent
-                  (Z_to_bv 64 0) (Z_to_bv 64 0) (Z_to_bv 64 0) false Sv48 [] [] None None).
+                  (Z_to_bv 64 0) (Z_to_bv 64 0) (Z_to_bv 64 0) false Sv48 [] [] None None false).
   exists base.
   exists (mkFinProcInput [] [] []
             [] (Z_to_bv 64 0) (Z_to_bv 64 0) [] net_silent
             (Z_to_bv 64 0) (Z_to_bv 64 0) (Z_to_bv 64 0) false Sv48
-            [Z_to_bv 8 0] [] None None).
+            [Z_to_bv 8 0] [] None None false).
   split.
   - intro Hc. apply (f_equal fin_urandom) in Hc.
     unfold base in Hc. cbn [fin_urandom] in Hc. discriminate Hc.
@@ -822,14 +828,15 @@ Qed.
 Lemma finite_input_surjection : forall inp,
   finite_input inp -> exists f, inp = to_proc_input f.
 Proof.
-  (* [State.ProcInput]'s constructor order, the three ENVIRONMENT fields
+  (* [State.ProcInput]'s constructor order, with the environment fields
      last: argv, envp, image, stdin, ids, queue, limits, declarations,
-     then [in_urandom], [in_tmp], [in_proc_maps], and [in_hwprobe] *)
-  intros [a e fs s u g gs n nf sm hc ab va r tm pm hp] Hfin.
+     then [in_urandom], [in_tmp], [in_proc_maps], [in_hwprobe], and
+     [in_sigaltstack_autodisarm] *)
+  intros [a e fs s u g gs n nf sm hc ab va r tm pm hp ad] Hfin.
   unfold finite_input in Hfin. cbn [in_stdin in_urandom] in Hfin.
   destruct Hfin as [Hfin [lr Hlr]].
   destruct (finite_stream_of_list _ Hfin) as [l Hl].
-  exists (mkFinProcInput a e fs l u g gs n nf sm hc ab va lr tm pm hp).
+  exists (mkFinProcInput a e fs l u g gs n nf sm hc ab va lr tm pm hp ad).
   unfold to_proc_input.
   cbn [fin_argv fin_envp fin_image_fs fin_tmp fin_stdin fin_urandom fin_uid fin_gid fin_groups fin_net
        fin_nofile fin_sigmask fin_hwcap fin_abort_terminal fin_va_size].
@@ -891,7 +898,7 @@ Lemma valid_input_stdin_irrelevant : forall inp s,
   valid_input (mkProcInput_full (in_argv inp) (in_envp inp) (in_image_fs inp) s
                  (in_uid inp) (in_gid inp) (in_groups inp) (in_net inp)
                  (in_nofile inp) (in_sigmask inp) (in_hwcap inp) (in_abort_terminal inp) (in_va_size inp)
-                 (in_urandom inp) (in_tmp inp) (in_proc_maps inp) (in_hwprobe inp)).
+                 (in_urandom inp) (in_tmp inp) (in_proc_maps inp) (in_hwprobe inp) (in_sigaltstack_autodisarm inp)).
 Proof. intros inp s H. exact H. Qed.
 
 (** THE RANDOM DEVICE'S STREAM IS NOT LIKE STANDARD INPUT.
@@ -910,7 +917,7 @@ Lemma valid_input_urandom_endless_irrelevant : forall inp r,
                  (in_stdin inp)
                  (in_uid inp) (in_gid inp) (in_groups inp) (in_net inp)
                  (in_nofile inp) (in_sigmask inp) (in_hwcap inp) (in_abort_terminal inp) (in_va_size inp)
-                 r (in_tmp inp) (in_proc_maps inp) (in_hwprobe inp)).
+                 r (in_tmp inp) (in_proc_maps inp) (in_hwprobe inp) (in_sigaltstack_autodisarm inp)).
 Proof.
   intros inp r H Hr.
   (* [valid_input] has eleven conjuncts: keep the first ten and replace the last ([valid_urandom]) with [Hr]. *)
@@ -929,7 +936,7 @@ Lemma valid_fin_input_stdin_irrelevant : forall f l,
                      l
                      (fin_uid f) (fin_gid f) (fin_groups f) (fin_net f)
                      (fin_nofile f) (fin_sigmask f) (fin_hwcap f) (fin_abort_terminal f) (fin_va_size f)
-                     (fin_urandom f) (fin_tmp f) (fin_proc_maps f) (fin_hwprobe f)).
+                     (fin_urandom f) (fin_tmp f) (fin_proc_maps f) (fin_hwprobe f) (fin_sigaltstack_autodisarm f)).
 Proof. intros f l H. exact H. Qed.
 
 (** And the byte list in [fin_urandom] is unconstrained too — even
@@ -955,7 +962,7 @@ Lemma valid_input_tmp_arbitrary : forall inp t,
                  (in_uid inp) (in_gid inp) (in_groups inp) (in_net inp)
                  (in_nofile inp) (in_sigmask inp) (in_hwcap inp)
                  (in_abort_terminal inp) (in_va_size inp) (in_urandom inp) t
-                 (in_proc_maps inp) (in_hwprobe inp)).
+                 (in_proc_maps inp) (in_hwprobe inp) (in_sigaltstack_autodisarm inp)).
 Proof.
   intros inp t Him H. unfold valid_input in H |- *.
   destruct H as (Ha & He & _ & Hrest).
@@ -970,7 +977,7 @@ Lemma valid_fin_input_urandom_irrelevant : forall f l,
                      (fin_stdin f)
                      (fin_uid f) (fin_gid f) (fin_groups f) (fin_net f)
                      (fin_nofile f) (fin_sigmask f) (fin_hwcap f) (fin_abort_terminal f) (fin_va_size f)
-                     l (fin_tmp f) (fin_proc_maps f) (fin_hwprobe f)).
+                     l (fin_tmp f) (fin_proc_maps f) (fin_hwprobe f) (fin_sigaltstack_autodisarm f)).
 Proof.
   intros f l H.
   (* Eleven conjuncts: keep the first ten and prove the last ([valid_urandom]) from the padding. *)
@@ -999,7 +1006,7 @@ Qed.
 Definition inhabited_fin_input : FinProcInput :=
   mkFinProcInput [[]] [] [] [] (Z_to_bv 64 0) (Z_to_bv 64 0) [] net_silent
                  default_nofile (Z_to_bv 64 0) StackLayout.hwcap_rv64gc
-                 false Sv48 [] [] None None.
+                 false Sv48 [] [] None None false.
 
 (** THE FINITE-RECORD QUANTIFIER IS NOT EMPTY, which is the one the
     classifier and gated-size shapes are written over. *)
@@ -1056,12 +1063,12 @@ Lemma valid_input_not_finite : forall inp,
                  all_zeros
                  (in_uid inp) (in_gid inp) (in_groups inp) (in_net inp)
                  (in_nofile inp) (in_sigmask inp) (in_hwcap inp) (in_abort_terminal inp) (in_va_size inp)
-                 (in_urandom inp) (in_tmp inp) (in_proc_maps inp) (in_hwprobe inp))
+                 (in_urandom inp) (in_tmp inp) (in_proc_maps inp) (in_hwprobe inp) (in_sigaltstack_autodisarm inp))
   /\ ~ finite_input (mkProcInput_full (in_argv inp) (in_envp inp) (in_image_fs inp)
                       all_zeros
                       (in_uid inp) (in_gid inp) (in_groups inp) (in_net inp)
                       (in_nofile inp) (in_sigmask inp) (in_hwcap inp) (in_abort_terminal inp) (in_va_size inp)
-                      (in_urandom inp) (in_tmp inp) (in_proc_maps inp) (in_hwprobe inp)).
+                      (in_urandom inp) (in_tmp inp) (in_proc_maps inp) (in_hwprobe inp) (in_sigaltstack_autodisarm inp)).
 Proof.
   intros inp H. split.
   - apply valid_input_stdin_irrelevant, H.
