@@ -105,7 +105,8 @@ Record machine_state := {
   ms_resv        : option word;
   ms_fcsr        : bv 32;
   ms_mem         : word -> option byte;
-  ms_rom         : word -> option byte
+  ms_rom         : word -> option byte;
+  ms_ro          : list (word * word) (* read-only ranges: base, length *)
 }.
 
 Definition ms_pc (st : machine_state) : word := st.(ms_pc_val).
@@ -129,7 +130,7 @@ Definition set_reg (st : machine_state) (r : reg) (v : word) : machine_state :=
           ms_svc_pending := st.(ms_svc_pending);
           ms_resv := st.(ms_resv); ms_fcsr := st.(ms_fcsr);
           ms_mem := st.(ms_mem);
-          ms_rom := st.(ms_rom) |}.
+          ms_rom := st.(ms_rom); ms_ro := ms_ro st |}.
 
 (** Set a0 (= x10), the syscall return register. *)
 Definition set_gpr0 (ms : machine_state) (ret : word) : machine_state :=
@@ -155,7 +156,7 @@ Definition set_gpr0_write_buf (ms : machine_state) (ret : word)
      ms_svc_pending := ms_svc_pending ms';
      ms_resv := ms_resv ms'; ms_fcsr := ms_fcsr ms';
      ms_mem := write_to_mem (ms_mem ms') buf_addr data;
-     ms_rom := ms_rom ms' |}.
+     ms_rom := ms_rom ms'; ms_ro := ms_ro ms' |}.
 
 (** ** Machine step result
 
@@ -539,8 +540,16 @@ Definition wview (m : word -> option byte) (addr : word) : option byte :=
       end
   end.
 
+Definition ro_free (ro : list (word * word)) (addr : word) (n : nat) : bool :=
+  forallb
+    (fun p =>
+      negb (Z.ltb (bv_unsigned addr)
+        (bv_unsigned (fst p) + bv_unsigned (snd p))
+        && Z.ltb (bv_unsigned (fst p))
+             (bv_unsigned addr + Z.of_nat n))) ro.
+
 Definition ms_writable_byte (ms : machine_state) (addr : word) : option byte :=
-  wview (ms_mem ms) addr.
+  if ro_free (ms_ro ms) addr 1 then wview (ms_mem ms) addr else None.
 
 (** ** The store bound
 
@@ -870,7 +879,8 @@ Definition drop_access_report {A} (r : machine_result (access_report A))
       so the process takes SIGILL and dies.  This is the same split
       [EFault]/[EIllegal] draw, one level up: see [Sem.csr_write_illegal]
       for why the address alone settles it. *)
-Fixpoint interp_eff_accesses (t : eff) (m : word -> option byte)
+Fixpoint interp_eff_accesses_ro (ro : list (word * word))
+    (t : eff) (m : word -> option byte)
     : machine_result (access_report (core * (word -> option byte))) :=
   match t with
   | EDone c => MachineOk (mkAccessReport (c, m) [])
@@ -879,7 +889,7 @@ Fixpoint interp_eff_accesses (t : eff) (m : word -> option byte)
   | ELoad n a k =>
       match ov_read_bytes m a (width_bytes n) with
       | Some bs =>
-        match interp_eff_accesses
+        match interp_eff_accesses_ro ro
                 (k (bv_extract 0 n (le_bytes_to_word bs))) m with
         | MachineOk report =>
           MachineOk
@@ -891,9 +901,9 @@ Fixpoint interp_eff_accesses (t : eff) (m : word -> option byte)
       | None => MachineFault
       end
   | EStore n a v k =>
-      if store_ok m a (width_bytes n)
+      if store_ok m a (width_bytes n) && ro_free ro a (width_bytes n)
       then
-        match interp_eff_accesses k
+        match interp_eff_accesses_ro ro k
                 (write_to_mem m a
                    (Z_to_le_bytes (width_bytes n) (bv_unsigned v))) with
         | MachineOk report =>
@@ -905,6 +915,10 @@ Fixpoint interp_eff_accesses (t : eff) (m : word -> option byte)
         end
       else MachineFault
   end.
+
+Definition interp_eff_accesses (t : eff) (m : word -> option byte)
+    : machine_result (access_report (core * (word -> option byte))) :=
+  interp_eff_accesses_ro [] t m.
 
 (** There is one trusted interpreter.  Callers that do not need access
     observations project them away from its result. *)
@@ -962,13 +976,13 @@ Definition decode_exec_accesses (st : machine_state) (w : bv 32)
          ms_svc_pending := Some (ms_reg st 17);
          ms_resv := ms_resv st; ms_fcsr := ms_fcsr st;
          ms_mem := st.(ms_mem);
-         ms_rom := st.(ms_rom) |} [])
+         ms_rom := st.(ms_rom); ms_ro := ms_ro st |} [])
   else
     match decode_any w with
     | None =>
       if is_defined_illegal w then MachineFault else MachineUnmodeled
     | Some (i, isz) =>
-      match interp_eff_accesses (exec (Z_to_bv 64 isz) i
+      match interp_eff_accesses_ro (ms_ro st) (exec (Z_to_bv 64 isz) i
                            {| c_regs := st.(ms_regs);
                               c_fregs := st.(ms_fregs);
                               c_pc := st.(ms_pc_val);
@@ -985,7 +999,7 @@ Definition decode_exec_accesses (st : machine_state) (w : bv 32)
              ms_svc_pending := None;
              ms_resv := c.(c_resv); ms_fcsr := c.(c_fcsr);
              ms_mem := m';
-             ms_rom := st.(ms_rom) |}
+             ms_rom := st.(ms_rom); ms_ro := ms_ro st |}
           (@accessed_ranges _ report))
       end
     end.

@@ -86,8 +86,8 @@ Definition mremap_snapshot_mem (a : word) : option byte :=
 Definition mremap_snapshot_ms : machine_state := {|
   ms_regs := bvmap_empty; ms_fregs := bvmap_empty; ms_pc_val := 0;
   ms_svc_pending := None; ms_resv := None; ms_fcsr := 0;
-  ms_mem := mremap_snapshot_mem; ms_rom := fun _ => None
-|}.
+  ms_mem := mremap_snapshot_mem; ms_rom := fun _ => None;
+  ms_ro := [] |}.
 
 Definition mremap_snapshot_effect : SyscallEffect :=
   mkEffectU 131072 [] [(135168, 4096)] [(65536, 4096)]

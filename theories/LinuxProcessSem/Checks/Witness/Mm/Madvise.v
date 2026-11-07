@@ -16,17 +16,46 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Witness Require Export
   Prelude.
 
-(** madvise witness: the spec has no nondeterminism, so the witness is
-    the spec's one answer at every gate — -EINVAL on a misaligned
-    address or a wrapping range, 0 at zero length, the zero-fill with
-    the returned charges on the answered shape, and [Unmodeled] (fail
-    closed) on any other advice value or any range the ledger does not
-    describe as one read-write anonymous mapping (see
-    [Madvise.madvise_spec]). *)
+(** The witness chooses success for a covered NOHUGEPAGE call and the
+    deterministic result for DONTNEED.  It uses [Unmodeled] outside the
+    recorded anonymous mappings and for other advice values. *)
+Definition madvise_nohuge_witness (addr len : word) (m : Model)
+    : outcome SyscallEffect :=
+  if w_is0 len then ret_outcome (Z_to_bv 64 0) m
+  else if (two_pow_64 <=? bv_unsigned addr + page_round_up_Z (bv_unsigned len))%Z
+  then ret_outcome (errno_ret EINVAL) m
+  else if madvise_nohuge_ok (m_vmmaps m) addr
+            (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))
+       then ret_outcome (Z_to_bv 64 0) m
+       else Unmodeled.
+
+Lemma madvise_nohuge_witness_ok : forall addr len i m,
+  madvise_nohuge_spec addr len i m (madvise_nohuge_witness addr len m).
+Proof.
+  intros. unfold madvise_nohuge_spec, madvise_nohuge_witness.
+  destruct (w_is0 len) eqn:Hlen.
+  { unfold madvise_nohuge_result.
+    eapply bind_step;
+      [apply (choose_ok _ (Z_to_bv 64 0)); vm_compute; reflexivity
+      |apply pure_ok]. }
+  destruct ((two_pow_64
+             <=? bv_unsigned addr + page_round_up_Z (bv_unsigned len))%Z)
+    eqn:Hbig; [apply pure_ok|].
+  cbv zeta. eapply bind_step; [apply get_model_ok|]. cbv beta zeta.
+  destruct (madvise_nohuge_ok (m_vmmaps m) addr
+    (Z_to_bv 64 (page_round_up_Z (bv_unsigned len)))) eqn:Hok.
+  - unfold madvise_nohuge_result.
+    eapply bind_step;
+      [apply (choose_ok _ (Z_to_bv 64 0)); vm_compute; reflexivity
+      |apply pure_ok].
+  - apply unmodeled_intro.
+Qed.
+
 Definition madvise_witness (addr len advice : word) (m : Model)
     : outcome SyscallEffect :=
   if negb (Z.eqb (bv_unsigned addr mod page_size) 0)
   then ret_outcome (errno_ret EINVAL) m
+  else if madvise_nohuge_b advice then madvise_nohuge_witness addr len m
   else if negb (madvise_dontneed_b advice) then Unmodeled
   else if w_is0 len then ret_outcome (Z_to_bv 64 0) m
   else if (two_pow_64 <=? bv_unsigned addr + page_round_up_Z (bv_unsigned len))%Z
@@ -45,6 +74,8 @@ Proof.
   intros. unfold madvise_spec, madvise_witness.
   destruct (negb (Z.eqb (bv_unsigned addr mod page_size) 0)) eqn:Halign;
     [apply pure_ok|].
+  destruct (madvise_nohuge_b advice) eqn:Hnohuge;
+    [apply madvise_nohuge_witness_ok|].
   destruct (negb (madvise_dontneed_b advice)) eqn:Hadv;
     [apply unmodeled_intro|].
   destruct (w_is0 len) eqn:Hlen; [apply pure_ok|].

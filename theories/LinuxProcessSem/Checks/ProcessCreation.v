@@ -507,23 +507,21 @@ Proof. intros i m Hno. declined_at Hno. Qed.
     arguments rest on each of them having no arm, and the two
     arguments are different ones.
 
-    164 WRITES.  [State.limst_nofile] holds ONE soft RLIMIT_NOFILE for a
-    whole run and [Fs.File.dup3_spec] compares [newfd] against it, which
-    are both claims that nothing modeled can change the limit.  Three
-    system calls reach [do_prlimit] with a [new_rlim] (kernel/sys.c,
+    164 WRITES.  [State.limst_nofile] holds the current soft
+    RLIMIT_NOFILE and [Fs.File.dup3_spec] compares [newfd] against it.
+    The modeled [prlimit64] set can raise this value; the lemma below
+    concerns the separate [setrlimit] syscall.  Three system calls
+    reach [do_prlimit] with a [new_rlim] (kernel/sys.c,
     Linux v6.18.46, commit 1f99e9ab748f): 164, its compat twin, and
-    [prlimit64] (261).  261 IS inside [Specs.modeled_sysnos], and is
-    closed by an arm rather than by this register —
-    [Kernel.Sys.prlimit64_spec] declines every resource but RLIMIT_CORE
-    — which is why only 164 needs an entry here.  Everything else that
-    writes [signal->rlim] runs at exec, at boot or on a core dump, and
-    is out of reach for the same reason 221 is; [Run.valid_nofile]
-    enumerates those.
+    [prlimit64] (261).  261 IS inside [Specs.modeled_sysnos], and has
+    its own scoped arm — which is why only 164 needs an entry here.
+    Everything else that writes [signal->rlim] runs at exec, at boot
+    or on a core dump, and is out of reach for the same reason 221 is;
+    [Run.valid_nofile] enumerates those.
 
     163 READS, and passes [NULL] for [new_rlim] (kernel/sys.c,
-    [SYSCALL_DEFINE2(getrlimit)]), so it changes nothing.  Its decline
-    is load-bearing on the other side: no modeled syscall reads the
-    limit back.
+    [SYSCALL_DEFINE2(getrlimit)]), so it changes nothing.  Its direct
+    syscall remains unmodeled; the [prlimit64] read has its own arm.
 
     Neither is modeled, and neither is merely undone work: they enter
     [do_prlimit] DIRECTLY, skipping [check_prlimit_permission] and the
@@ -727,8 +725,8 @@ Qed.
     arm answers, written as a definition rather than left implicit in a
     [match], and [prctl_modeled_options_are] pins it EXACTLY — not that
     55 is absent from it, which a widening could preserve, but that the
-    list is [[PR_CAPBSET_READ]] and nothing else.  So the tripwire keeps
-    its shape: an edit that teaches [prctl] a second
+    list is [[PR_CAPBSET_READ; PR_SET_VMA]].  So the tripwire keeps
+    its shape: an edit that teaches [prctl] another
     option fails a named proof in this file, and whoever makes that edit
     has to come back here and say what it does to the tagging argument.
     The three statements below are that argument, from the general to
@@ -740,7 +738,7 @@ Qed.
     it could not be modeled by masking registers on entry either. *)
 
 Example prctl_modeled_options_are :
-  prctl_modeled_options = [PR_CAPBSET_READ].
+  prctl_modeled_options = [PR_CAPBSET_READ; PR_SET_VMA].
 Proof. reflexivity. Qed.
 
 (** Every option outside that list falls through [prctl_spec]'s first
@@ -763,7 +761,11 @@ Proof.
     as [Heq|_]; cbn [negb].
   - exfalso. apply Hopt. unfold prctl_modeled_options. rewrite Heq.
     now left.
-  - apply unmodeled_intro.
+  - destruct (Z.eqb_spec (bv_unsigned (int32 (in_arg i 0))) PR_SET_VMA)
+      as [Heq|_].
+    + exfalso. apply Hopt. unfold prctl_modeled_options. rewrite Heq.
+      now right; left.
+    + apply unmodeled_intro.
 Qed.
 
 (** The particular case the tagging argument needs. *)
@@ -773,8 +775,8 @@ Lemma prctl_tagged_addr_ctrl_unmodeled : forall i m,
   syscall_spec i m Unmodeled.
 Proof.
   intros i m Hno Hopt. apply prctl_option_unmodeled; [exact Hno|].
-  rewrite Hopt. unfold prctl_modeled_options, PR_CAPBSET_READ.
-  intros [H|H]; [discriminate H|exact H].
+  rewrite Hopt. unfold prctl_modeled_options, PR_CAPBSET_READ, PR_SET_VMA.
+  intros [H|[H|H]]; [discriminate H|discriminate H|exact H].
 Qed.
 
 (** [ptrace] (117).  The OTHER caller of [set_tagged_addr_ctrl], through

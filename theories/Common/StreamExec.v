@@ -113,7 +113,7 @@ Qed.
 Lemma adv_apply_write : forall regs pc sv mem rom ret buf data,
   advance_past_svc (apply_effect
     {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc; ms_svc_pending := sv; ms_resv := None; ms_fcsr := fp_csr;
-       ms_mem := mem; ms_rom := rom |}
+       ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (mkEffect ret [(buf, data)] []))
   = mkst (regupd regs 10 ret) (v_addi pc 4) (write_to_mem mem buf data) rom.
 Proof.
@@ -135,7 +135,7 @@ Qed.
 Lemma adv_apply_delivered : forall regs pc sv mem rom ret buf data,
   advance_past_svc (apply_effect
     {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc; ms_svc_pending := sv; ms_resv := None; ms_fcsr := fp_csr;
-       ms_mem := mem; ms_rom := rom |}
+       ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (mkEffect ret (delivered_writes buf data) []))
   = mkst (regupd regs 10 ret) (v_addi pc 4) (write_to_mem mem buf data) rom.
 Proof.

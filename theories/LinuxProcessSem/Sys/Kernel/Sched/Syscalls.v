@@ -139,8 +139,7 @@ Open Scope sys_scope.
       none of them is under arch/riscv, so the arch never overrides the
       value and the two routes above are the whole story here.
 
-    THE ORDER IS WHY [pid] AND [user_mask_ptr] ARE ABSENT FROM THE
-    SIGNATURE.  Both gates run before [find_process_by_pid] is reached
+    BOTH GATES RUN BEFORE [find_process_by_pid] is reached
     and before the pointer is touched at all: there is no [access_ok]
     anywhere in kernel/sched/syscalls.c, and the pointer's first and
     only use is the [copy_to_user] inside the [ret == 0] block.  A
@@ -148,43 +147,21 @@ Open Scope sys_scope.
     [zalloc_cpumask_var] sits behind both gates too, so it cannot
     pre-empt either answer.
 
-    WHY THE REST IS DECLINED.  A length that is a nonzero multiple of 8
-    whose bit count does not wrap either succeeds or is -EINVAL, and
-    which one it is depends on [nr_cpu_ids].  Modeling that needs three
-    facts about the machine, none of which this model represents:
+    A SUCCESS SHORTER THAN THE REQUEST reveals [cpumask_size()].  This
+    arm accepts an eight-byte return for a request longer than eight
+    bytes and records that size in [procst_affinity_size].  Later valid
+    lengths can return eight bytes: [nr_cpu_ids] is at most 64 when
+    [cpumask_size()] is eight, so the first gate passes for every
+    nonzero eight-aligned length.  This follows from [cpumask_size() =
+    bitmap_size(large_cpumask_bits)] and [large_cpumask_bits >=
+    nr_cpu_ids] in include/linux/cpumask.h.  The mask bytes are chosen
+    per call because [p->cpus_mask & cpu_active_mask] can change.
 
-    - [nr_cpu_ids], which decides the first gate;
-    - [cpumask_size()], which decides the RETURN VALUE, since a success
-      returns [min(len, cpumask_size())] and not 0.  It is
-      [bitmap_size(large_cpumask_bits)] (include/linux/cpumask.h), and
-      [large_cpumask_bits] is the compile-time [NR_CPUS] when
-      [NR_CPUS <= 4*BITS_PER_LONG] and the runtime [nr_cpu_ids] above
-      that — so the byte count a successful call returns is not a
-      function of [len] alone;
-    - the mask itself, [p->cpus_mask & cpu_active_mask], which is the
-      bytes copied out.
-
-    They are also not per-call choices.  A machine has one CPU count for
-    the life of a process, so a [choose] resolved afresh at each call
-    would admit a trace in which two [sched_getaffinity] calls disagree
-    about how many CPUs exist — a trace no Linux machine produces.  The
-    honest shape is a model-state field pinned at the first observation,
-    the way [State.limst_core] pins RLIMIT_CORE and [State.procst_tid]
-    pins the tid; that field does not exist yet, and adding it is what
-    the successful path waits on.  [State.v]'s note above [Record Model]
-    compares that mechanism against the two alternatives.
-
-    Cost of the decline, stated plainly: a program that asks how many
-    CPUs it may run on leaves the modeled surface on that call.  musl's
-    [do_getaffinity] (musl 1.2.5, src/sched/affinity.c) passes [size]
-    through unchanged and then uses the RETURNED byte count to zero the
-    tail of the caller's [cpu_set_t] before answering 0 — so the count
-    this spec declines to produce is the one that wrapper depends on,
-    and a [CPU_COUNT] query over any plausible [cpu_set_t] lands in the
-    declined band.  So does the Zig standard library's
-    [std.Thread.getCpuCount].  A program that merely passes a malformed
-    length — a zero, an unaligned one, or one of the wrapping ones —
-    does not. *)
+    Only the calling task is modeled.  [pid = 0] names it; a positive
+    [pid] must match the tid recorded by [set_tid_address].  A pointer
+    must cover eight writable bytes without wrapping.  Partial writes,
+    an equal-size first request, and observations of larger CPU masks
+    remain declined.  Allocation can return -ENOMEM after the gates. *)
 
 (** The two gates, as one predicate over the [unsigned int] the ABI
     delivers.  The disjunction's order is not the kernel's order (the
@@ -205,8 +182,45 @@ Definition affinity_len_einval_b (len : word) : bool :=
   let l := bv_unsigned (abi_low32 len) in
   (((l * 8) mod 2 ^ 32 =? 0)%Z || negb ((l mod 8 =? 0)%Z))%bool.
 
+(** The same task test used by sched_setscheduler below. *)
+Definition sched_targets_self_b (pid : word) (m : Model) : bool :=
+  (w_is0 (pid32 pid)
+   || match m_tid m with
+      | Some tid => bv_eqb (pid32 pid) tid
+      | None => false
+      end)%bool.
+
+(** A short first return identifies an eight-byte cpumask. *)
+Definition affinity_size_ready_b (len : word) (m : Model) : bool :=
+  match m_affinity_size m with
+  | None => (8 <? bv_unsigned (abi_low32 len))%Z
+  | Some 8%nat => true
+  | Some _ => false
+  end.
+
+Definition affinity_after_success (m : Model) : Model :=
+  match m_affinity_size m with
+  | None => with_affinity_size 8%nat m
+  | Some _ => m
+  end.
+
 Definition sched_getaffinity_spec (len : word) : Sys SyscallEffect :=
-  if affinity_len_einval_b len then err_ret EINVAL else unmodeled.
+  if affinity_len_einval_b len then err_ret EINVAL else
+  i <- input ;;
+  m <- get_model ;;
+  let pid := in_arg i 0 in
+  let ptr := in_arg i 2 in
+  if negb (sched_targets_self_b pid m) then unmodeled else
+  if negb (access_okb ptr 8) then unmodeled else
+  match read_bytes_map (in_wmem i) ptr (Z_to_bv 64 8) with
+  | None => unmodeled
+  | Some _ =>
+      if negb (affinity_size_ready_b len m) then unmodeled else
+      alt (err_ret ENOMEM)
+        (bs <- choose (fun bs : list byte => length bs = 8%nat) ;;
+         modify affinity_after_success ;;
+         pure (mkEffect (Z_to_bv 64 8) [(ptr, bs)] []))
+  end.
 
 (* ---- sched_setscheduler (119) ------------------------------------------- *)
 
@@ -410,20 +424,6 @@ Definition sched_valid_policy_b (pol : Z) : bool :=
 (** [rt_policy], which is config-independent. *)
 Definition sched_rt_policy_b (pol : Z) : bool :=
   ((pol =? SCHED_FIFO) || (pol =? SCHED_RR))%Z.
-
-(** Whether the call names the CALLING task, which is the only task this
-    model represents.  [find_process_by_pid] is
-    [pid ? find_task_by_vpid(pid) : current], so a zero pid always does;
-    a positive one does exactly when it is the pinned tid.  The pid is
-    read at [pid32] width because it arrives as a [pid_t], and the zero
-    test is on those low 32 bits for the same reason — a register whose
-    low half is zero IS a zero pid to the kernel. *)
-Definition sched_targets_self_b (pid : word) (m : Model) : bool :=
-  (w_is0 (pid32 pid)
-   || match m_tid m with
-      | Some tid => bv_eqb (pid32 pid) tid
-      | None => false
-      end)%bool.
 
 (** EVERYTHING [__sched_setscheduler] DECIDES ONCE THE TASK IS IN HAND,
     as one function of the policy word and the copied-in priority:

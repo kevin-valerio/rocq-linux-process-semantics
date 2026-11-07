@@ -136,6 +136,11 @@ A reflective executor runs a block of instructions inside Rocq with
   all integer loads and stores, and RV64A atomics. The ASan plan checker
   below uses it.
 
+  `AX2.mk_itabC` scans halfword addresses and stores each decoded
+  instruction with its size. `AX2.sym_execTC` and `AX2.sym_execTXC` run
+  two and four byte instructions from that table. Their soundness theorems
+  are `AX2S.sym_execTC_sound` and `AX2S.sym_execTXC_sound`.
+
 ### Summaries and Hoare logic (prototype)
 
 - `Hoare`: triples over `msteps`, with frame, call and loop rules.

@@ -18,17 +18,23 @@ From LinuxProcessSemantics.LinuxProcessSem.Checks.Witness Require Export
 
 (** fcntl witness: -EBADF on a closed fd, 0 for F_SETFD and for an
     F_SETFL that provably changes nothing, the derived flag word for an
-    F_GETFL on an fd kind [Fcntl.getfl_f_flags] answers for, and
-    [Unmodeled] on every other command. *)
+    F_GETFL on an fd kind [Fcntl.getfl_f_flags] answers for, the tracked
+    channel descriptor bit for F_GETFD, and [Unmodeled] otherwise. *)
 Definition fcntl_witness (fd cmd arg : word) (m : Model) : outcome SyscallEffect :=
   match fd_lookup (m_fds m) fd with
   | None => ret_outcome (errno_ret EBADF) m
   | Some e =>
-      if bv_eqb cmd F_SETFD then ret_outcome (Z_to_bv 64 0) m
+      if bv_eqb cmd F_SETFD then
+        ret_outcome (Z_to_bv 64 0) (setfd_model fd arg e m)
       else if bv_eqb cmd F_SETFL && setfl_noop_on e arg
       then ret_outcome (Z_to_bv 64 0) m
       else if bv_eqb cmd F_GETFL then
-        match getfl_f_flags e with
+        match getfl_f_flags m e with
+        | Some fl => ret_outcome fl m
+        | None => Unmodeled
+        end
+      else if bv_eqb cmd F_GETFD then
+        match getfd_flags m fd e with
         | Some fl => ret_outcome fl m
         | None => Unmodeled
         end
@@ -42,18 +48,28 @@ Proof.
   destruct (fd_lookup (m_fds m) fd) as [e|] eqn:Hfd.
   - destruct (bv_eqb cmd F_SETFD) eqn:Hd.
     + eapply bind_step; [apply get_model_ok|].
-      cbv beta iota; srw Hfd. apply pure_ok.
+      cbv beta iota; srw Hfd.
+      eapply bind_step; [apply modify_ok|apply pure_ok].
     + destruct (bv_eqb cmd F_SETFL && setfl_noop_on e arg) eqn:Hl.
       * eapply bind_step; [apply get_model_ok|].
         cbv beta iota; srw Hfd; srw Hl. apply pure_ok.
       * destruct (bv_eqb cmd F_GETFL) eqn:Hg.
-        -- destruct (getfl_f_flags e) as [fl|] eqn:Hgf.
+        -- destruct (getfl_f_flags m e) as [fl|] eqn:Hgf.
            ++ eapply bind_step; [apply get_model_ok|].
               cbv beta iota; srw Hfd; srw Hl; srw Hgf. apply pure_ok.
            ++ eapply bind_step; [apply get_model_ok|].
               cbv beta iota; srw Hfd; srw Hl; srw Hgf. apply unmodeled_intro.
-        -- eapply bind_step; [apply get_model_ok|].
-           cbv beta iota; srw Hfd; srw Hl. apply unmodeled_intro.
+        -- destruct (bv_eqb cmd F_GETFD) eqn:Hfdcmd.
+           ++ destruct (getfd_flags m fd e) as [fl|] eqn:Hgf.
+              ** eapply bind_step; [apply get_model_ok|].
+                 cbv beta iota; srw Hfd; srw Hl; srw Hgf.
+                 apply pure_ok.
+              ** eapply bind_step; [apply get_model_ok|].
+                 cbv beta iota; srw Hfd; srw Hl; srw Hgf.
+                 apply unmodeled_intro.
+           ++ eapply bind_step; [apply get_model_ok|].
+              cbv beta iota; srw Hfd; srw Hl.
+              apply unmodeled_intro.
   - eapply bind_step; [apply get_model_ok|].
     cbv beta iota; srw Hfd. apply pure_ok.
 Qed.

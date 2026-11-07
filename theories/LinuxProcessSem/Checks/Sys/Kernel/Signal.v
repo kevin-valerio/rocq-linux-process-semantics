@@ -16,31 +16,145 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Sys Require Export
   Prelude.
 
-(** sigaltstack: no arm touches user memory, so every admissible outcome
-    is a bare return; exactly one of them carries the model forward with
-    the alternate-stack bit set, the install.  SS_DISABLE succeeds and
-    does NOT set it: the kernel zeroes [ss_size] before the store, so the
-    record stays in the shape the arms below can answer from.  The
-    declining arms are the ones whose answer would need the user stack
-    pointer, or the stored flags word (see [Signal.sigaltstack_spec]). *)
+Definition ss_oldstack_shapeb (autodisarm : bool) (bs : list byte) : bool :=
+  Nat.eqb (length bs) 24 &&
+  listN_eqb (firstn 8 bs) (repeat 0 8) &&
+  listN_eqb (firstn 4 (skipn 8 bs)) (ss_oldstack_flags_bytes autodisarm) &&
+  listN_eqb (skipn 16 bs) (repeat 0 8).
+
+Lemma ss_oldstack_shapeb_iff : forall autodisarm bs,
+  ss_oldstack_shapeb autodisarm bs = true <->
+  ss_oldstack_shape autodisarm bs.
+Proof.
+  intros. unfold ss_oldstack_shapeb, ss_oldstack_shape.
+  rewrite !Bool.andb_true_iff, Nat.eqb_eq, !listN_eqb_eq.
+  tauto.
+Qed.
+
+Definition check_ss_oldstack (i : SyscallInput) (uoss : word)
+    (autodisarm : bool) (eff : SyscallEffect) (m : Model) : check_result :=
+  if negb (access_okb uoss SIGALTSTACK_BYTES)
+  then check_ret_only eff (errno_ret EFAULT) m []
+  else
+    match read_bytes_map (in_wmem i) uoss (Z_to_bv 64 SIGALTSTACK_BYTES) with
+    | None => CheckUnmodeled
+    | Some _ =>
+        match eff with
+        | mkEffectU ret [(a, bs)] [] [] [] [] =>
+            if bv_eqb ret (Z_to_bv 64 0) && bv_eqb a uoss &&
+               ss_oldstack_shapeb autodisarm bs
+            then CheckOk m [] else CheckReject
+        | _ => CheckReject
+        end
+    end.
+
+Lemma check_ss_oldstack_sound_ok : forall i uoss bit eff m m' evs,
+  check_ss_oldstack i uoss bit eff m = CheckOk m' evs ->
+  ss_oldstack_spec uoss bit i m (Ok eff m' evs).
+Proof.
+  intros i uoss bit [ret ws zs us cs cin] m m' evs H.
+  unfold check_ss_oldstack in H. unfold ss_oldstack_spec.
+  destruct (negb (access_okb uoss SIGALTSTACK_BYTES)) eqn:Ha; cbv iota.
+  { apply check_ret_only_ok_iff in H as (-> & -> & ->). apply pure_ok. }
+  eapply bind_ok0; [apply input_ok|]. cbv beta.
+  destruct (read_bytes_map (in_wmem i) uoss (Z_to_bv 64 SIGALTSTACK_BYTES));
+    cbv iota; [|discriminate].
+  destruct ws as [|[a bs] ws]; [discriminate|].
+  destruct ws; [|discriminate].
+  destruct zs; [|discriminate].
+  destruct us; [|discriminate].
+  destruct cs; [|discriminate].
+  destruct cin; [|discriminate].
+  destruct (bv_eqb ret (Z_to_bv 64 0) && bv_eqb a uoss &&
+            ss_oldstack_shapeb bit bs) eqn:Hfields; [|discriminate].
+  inversion H; clear H; subst.
+  apply andb_true_iff in Hfields as [Hfields Hshape].
+  apply andb_true_iff in Hfields as [Hr Haddr].
+  apply bv_eqb_eq in Hr. apply bv_eqb_eq in Haddr. subst.
+  eapply bind_ok0; [apply (choose_ok _ bs); apply ss_oldstack_shapeb_iff; exact Hshape|].
+  apply pure_ok.
+Qed.
+
+Lemma check_ss_oldstack_sound_unmodeled : forall i uoss bit eff m,
+  check_ss_oldstack i uoss bit eff m = CheckUnmodeled ->
+  ss_oldstack_spec uoss bit i m Unmodeled.
+Proof.
+  intros i uoss bit eff m H.
+  unfold check_ss_oldstack in H. unfold ss_oldstack_spec.
+  destruct (negb (access_okb uoss SIGALTSTACK_BYTES)) eqn:Ha; cbv iota.
+  { now apply check_ret_only_no_unmodeled in H. }
+  eapply bind_unmodeled2; [apply input_ok|]. cbv beta.
+  destruct (read_bytes_map (in_wmem i) uoss (Z_to_bv 64 SIGALTSTACK_BYTES));
+    cbv iota; [|apply unmodeled_intro].
+  destruct eff as [ret ws zs us cs cin].
+  destruct ws as [|[a bs] ws]; [discriminate|].
+  destruct ws; [|discriminate].
+  destruct zs; [|discriminate].
+  destruct us; [|discriminate].
+  destruct cs; [|discriminate].
+  destruct cin; [|discriminate].
+  destruct (bv_eqb ret (Z_to_bv 64 0) && bv_eqb a uoss &&
+            ss_oldstack_shapeb bit bs); discriminate.
+Qed.
+
+Lemma check_ss_oldstack_complete_ok : forall i uoss bit eff m m' evs,
+  ss_oldstack_spec uoss bit i m (Ok eff m' evs) ->
+  check_ss_oldstack i uoss bit eff m = CheckOk m' evs.
+Proof.
+  intros i uoss bit eff m m' evs H.
+  unfold ss_oldstack_spec in H. unfold check_ss_oldstack.
+  destruct (negb (access_okb uoss SIGALTSTACK_BYTES)) eqn:Ha;
+    cbv iota in *; sys_unfold; inv_ok.
+  { cbn. rewrite bv_eqb_refl. reflexivity. }
+  destruct (read_bytes_map (in_wmem i) uoss (Z_to_bv 64 SIGALTSTACK_BYTES));
+    cbv iota in *; [|inv_ok].
+  inv_ok. cbn.
+  match goal with
+  | Hshape : ss_oldstack_shape bit ?bs |- _ =>
+      apply (proj2 (ss_oldstack_shapeb_iff bit bs)) in Hshape
+  end.
+  bool_true. reflexivity.
+Qed.
+
+Lemma check_ss_oldstack_complete_unmodeled : forall i uoss bit m eff,
+  ss_oldstack_spec uoss bit i m Unmodeled ->
+  check_ss_oldstack i uoss bit eff m = CheckUnmodeled.
+Proof.
+  intros i uoss bit m eff H.
+  unfold ss_oldstack_spec in H. unfold check_ss_oldstack.
+  destruct (negb (access_okb uoss SIGALTSTACK_BYTES)) eqn:Ha;
+    cbv iota in *; sys_unfold; inv_ok.
+  destruct (read_bytes_map (in_wmem i) uoss (Z_to_bv 64 SIGALTSTACK_BYTES));
+    cbv iota in *; [inv_ok|reflexivity].
+Qed.
+
+(** A disabled stack reports a zero pointer and size.  Its inherited
+    SS_AUTODISARM bit is fixed for this process; padding is arbitrary. *)
 Definition check_sigaltstack (i : SyscallInput) (uss uoss : word)
     (eff : SyscallEffect) (m : Model) : check_result :=
   if m_sigaltstack_installed m then CheckUnmodeled
-  else if negb (w_is0 uoss) then CheckUnmodeled
+  else if negb (w_is0 uoss) then
+    if negb (w_is0 uss) then CheckUnmodeled
+    else check_ss_oldstack i uoss (m_sigaltstack_autodisarm m) eff m
   else if w_is0 uss then check_ret_only eff (Z_to_bv 64 0) m []
   else
     match sigaltstack_at (in_mem i) uss with
     | None => check_ret_only eff (errno_ret EFAULT) m []
     | Some bs =>
-        if negb (ss_mode_ok (ss_flags_of bs))
-        then check_ret_only eff (errno_ret EINVAL) m []
-        else if ss_disabling (ss_flags_of bs)
-        then check_ret_only eff (Z_to_bv 64 0) m []
-        else if (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool
-        then CheckUnmodeled
-        else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
-        then check_ret_only eff (errno_ret ENOMEM) m []
-        else check_ret_only eff (Z_to_bv 64 0) (with_sigaltstack_installed m) []
+        check_copyins_after [(uss, Z.to_nat SIGALTSTACK_BYTES)] eff
+          (if negb (ss_mode_ok (ss_flags_of bs))
+           then check_ret_only (clear_copyins eff) (errno_ret EINVAL) m []
+           else if ss_disabling (ss_flags_of bs)
+           then check_ret_only (clear_copyins eff) (Z_to_bv 64 0)
+                  (with_sigaltstack_autodisarm (ss_autodisarm_set (ss_flags_of bs)) m) []
+           else if (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool
+           then CheckUnmodeled
+           else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
+           then check_ret_only (clear_copyins eff) (errno_ret ENOMEM) m []
+           else check_ret_only (clear_copyins eff) (Z_to_bv 64 0)
+                  (with_sigaltstack_installed
+                     (with_sigaltstack_autodisarm
+                        (ss_autodisarm_set (ss_flags_of bs)) m)) [])
     end.
 
 Lemma check_sigaltstack_sound_ok : forall i uss uoss eff m m' evs,
@@ -51,7 +165,10 @@ Proof.
   unfold check_sigaltstack in H. unfold sigaltstack_spec.
   eapply bind_ok0; [apply get_model_ok|]. cbv beta.
   destruct (m_sigaltstack_installed m) eqn:Hw; cbv beta iota; [discriminate|].
-  destruct (negb (w_is0 uoss)) eqn:Ho; cbv beta iota; [discriminate|].
+  destruct (negb (w_is0 uoss)) eqn:Ho; cbv beta iota.
+  { destruct (negb (w_is0 uss)) eqn:Hu; cbv beta iota;
+      [discriminate|].
+    eapply check_ss_oldstack_sound_ok; exact H. }
   destruct (w_is0 uss) eqn:Hu; cbv beta iota.
   { apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
     apply pure_ok. }
@@ -59,12 +176,14 @@ Proof.
   destruct (sigaltstack_at (in_mem i) uss) as [bs|] eqn:Hbs; cbv beta iota.
   2:{ apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
       apply pure_ok. }
+  apply check_copyins_after_ok_iff in H as [Hreads H].
+  eapply record_copyins_clear_ok; [exact Hreads|].
   destruct (negb (ss_mode_ok (ss_flags_of bs))) eqn:Hmode; cbv beta iota.
   { apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
     apply pure_ok. }
   destruct (ss_disabling (ss_flags_of bs)) eqn:Hdis; cbv beta iota.
   { apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
-    apply pure_ok. }
+    eapply bind_ok0; [apply modify_ok|]. apply pure_ok. }
   destruct (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool eqn:Hzero;
     cbv beta iota; [discriminate|].
   destruct (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z eqn:Hsz;
@@ -72,6 +191,7 @@ Proof.
   { apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
     apply pure_ok. }
   apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
+  eapply bind_ok0; [apply modify_ok|].
   eapply bind_ok0; [apply modify_ok|]. apply pure_ok.
 Qed.
 
@@ -85,12 +205,16 @@ Proof.
   destruct (m_sigaltstack_installed m) eqn:Hw; cbv beta iota.
   { apply unmodeled_intro. }
   destruct (negb (w_is0 uoss)) eqn:Ho; cbv beta iota.
-  { apply unmodeled_intro. }
+  { destruct (negb (w_is0 uss)) eqn:Hu; cbv beta iota.
+    - apply unmodeled_intro.
+    - eapply check_ss_oldstack_sound_unmodeled; exact H. }
   destruct (w_is0 uss) eqn:Hu; cbv beta iota.
   { now apply check_ret_only_no_unmodeled in H. }
   eapply bind_unmodeled2; [apply input_ok|]. cbv beta.
   destruct (sigaltstack_at (in_mem i) uss) as [bs|] eqn:Hbs; cbv beta iota.
   2:{ now apply check_ret_only_no_unmodeled in H. }
+  apply check_copyins_after_unmodeled in H.
+  apply record_copyins_unmodeled.
   destruct (negb (ss_mode_ok (ss_flags_of bs))) eqn:Hmode; cbv beta iota.
   { now apply check_ret_only_no_unmodeled in H. }
   destruct (ss_disabling (ss_flags_of bs)) eqn:Hdis; cbv beta iota.
@@ -107,25 +231,38 @@ Lemma check_sigaltstack_complete_ok : forall i uss uoss eff m m' evs,
   check_sigaltstack i uss uoss eff m = CheckOk m' evs.
 Proof.
   intros i uss uoss eff m m' evs H.
-  unfold sigaltstack_spec in H. unfold check_sigaltstack. sys_unfold.
-  inv_ok.
-  destruct (m_sigaltstack_installed m) eqn:Hw; cbv beta iota in *; [inv_ok|].
-  destruct (negb (w_is0 uoss)) eqn:Ho; cbv beta iota in *; [inv_ok|].
+  unfold sigaltstack_spec in H. unfold check_sigaltstack.
+  apply get_model_bind_ok_inv in H.
+  destruct (m_sigaltstack_installed m) eqn:Hw; cbv beta iota in *;
+    [unfold unmodeled in H; discriminate|].
+  destruct (negb (w_is0 uoss)) eqn:Ho; cbv beta iota in *.
+  { destruct (negb (w_is0 uss)) eqn:Hu; cbv beta iota in *;
+      [unfold unmodeled in H; discriminate|].
+    eapply check_ss_oldstack_complete_ok; eassumption. }
   destruct (w_is0 uss) eqn:Hu; cbv beta iota in *.
-  { inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
-  inv_ok.
+  { sys_unfold. inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
+  apply input_bind_ok_inv in H.
   destruct (sigaltstack_at (in_mem i) uss) as [bs|] eqn:Hbs;
     cbv beta iota in *.
-  2:{ inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
+  2:{ sys_unfold. inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
+  apply record_copyins_ok_inv in H as [core [H Heff]].
+  subst eff.
+  sys_unfold.
   destruct (negb (ss_mode_ok (ss_flags_of bs))) eqn:Hmode;
     cbv beta iota in *.
-  { inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
+  { inv_ok. apply check_copyins_after_ok_iff. split; [reflexivity|].
+    cbn. rewrite bv_eqb_refl. reflexivity. }
   destruct (ss_disabling (ss_flags_of bs)) eqn:Hdis; cbv beta iota in *.
-  { inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
+  { inv_ok. apply check_copyins_after_ok_iff. split; [reflexivity|].
+    cbn. rewrite bv_eqb_refl. reflexivity. }
   destruct (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool eqn:Hzero;
     cbv beta iota in *; [inv_ok|].
   destruct (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z eqn:Hsz;
-    cbv beta iota in *; inv_ok; cbn; rewrite bv_eqb_refl; reflexivity.
+    cbv beta iota in *.
+  { inv_ok. apply check_copyins_after_ok_iff. split; [reflexivity|].
+    cbn. rewrite bv_eqb_refl. reflexivity. }
+  inv_ok. apply check_copyins_after_ok_iff. split; [reflexivity|].
+  cbn. rewrite bv_eqb_refl. reflexivity.
 Qed.
 
 Lemma check_sigaltstack_complete_unmodeled : forall i uss uoss m eff,
@@ -137,7 +274,10 @@ Proof.
   inv_ok.
   destruct (m_sigaltstack_installed m) eqn:Hw; cbv beta iota in *;
     [reflexivity|].
-  destruct (negb (w_is0 uoss)) eqn:Ho; cbv beta iota in *; [reflexivity|].
+  destruct (negb (w_is0 uoss)) eqn:Ho; cbv beta iota in *.
+  { destruct (negb (w_is0 uss)) eqn:Hu; cbv beta iota in *;
+      [reflexivity|].
+    eapply check_ss_oldstack_complete_unmodeled; eassumption. }
   destruct (w_is0 uss) eqn:Hu; cbv beta iota in *; [inv_ok|].
   inv_ok.
   destruct (sigaltstack_at (in_mem i) uss) as [bs|] eqn:Hbs;

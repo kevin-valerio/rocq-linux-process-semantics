@@ -223,7 +223,7 @@ Definition restrict (H : word -> bool) (ms : machine_state) : machine_state :=
      ms_svc_pending := ms_svc_pending ms;
      ms_resv := ms_resv ms; ms_fcsr := ms_fcsr ms;
      ms_mem := mrestrict H (ms_mem ms);
-     ms_rom := ms_rom ms |}.
+     ms_rom := ms_rom ms; ms_ro := ms_ro ms |}.
 
 Definition unrestrict (H : word -> bool) (full : word -> option byte)
     (ms' : machine_state) : machine_state :=
@@ -232,7 +232,7 @@ Definition unrestrict (H : word -> bool) (full : word -> option byte)
      ms_svc_pending := ms_svc_pending ms';
      ms_resv := ms_resv ms'; ms_fcsr := ms_fcsr ms';
      ms_mem := munrestrict H full (ms_mem ms');
-     ms_rom := ms_rom ms' |}.
+     ms_rom := ms_rom ms'; ms_ro := ms_ro ms' |}.
 
 (** No hidden address lies inside any loaded segment. *)
 Definition H_off_segments (segs : list Segment) (H : word -> bool) : Prop :=
@@ -624,17 +624,18 @@ Lemma fetch_failure_restrict : forall m a,
 Proof. intros m a. unfold fetch_failure. rewrite fetch_half_any_restrict. reflexivity. Qed.
 
 (** *** The effect-tree interpreter on a restricted overlay. *)
-Lemma interp_eff_accesses_restrict : forall t m c mr' rs,
-  interp_eff_accesses segs t (mrestrict H m)
+Lemma interp_eff_accesses_restrict : forall ro t m c mr' rs,
+  interp_eff_accesses_ro segs ro t (mrestrict H m)
     = MachineOk (@mkAccessReport _ (c, mr') rs) ->
   exists mf',
-    interp_eff_accesses segs t m = MachineOk (@mkAccessReport _ (c, mf') rs)
+    interp_eff_accesses_ro segs ro t m = MachineOk (@mkAccessReport _ (c, mf') rs)
     /\ mr' = mrestrict H mf'
     /\ (forall x, H x = true -> mf' x = m x)
     /\ ranges_avoid H rs.
 Proof.
-  induction t as [c0 | c0 | c0 | c0 | c0 | c0 | n a k IH | n a v k IH];
-    intros m c mr' rs Hi; cbn [interp_eff_accesses] in Hi |- *;
+  intros ro t. induction t as [c0 | c0 | c0 | c0 | c0 | c0 | n a k IH | n a v k IH];
+    intros m c mr' rs Hi;
+    cbn [interp_eff_accesses_ro] in Hi |- *;
     try discriminate.
   - (* EDone *)
     injection Hi as <- <- <-. exists m.
@@ -645,7 +646,8 @@ Proof.
       [|discriminate].
     destruct (ov_read_bytes_restrict _ m a bs Hrd) as [Hfull Hav].
     rewrite Hfull.
-    destruct (interp_eff_accesses segs (k (bv_extract 0 n (le_bytes_to_word bs))) (mrestrict H m))
+    destruct (interp_eff_accesses_ro segs ro
+      (k (bv_extract 0 n (le_bytes_to_word bs))) (mrestrict H m))
       as [[[c1 m1] rs1]| |] eqn:Hk; try discriminate.
     cbn [access_value accessed_ranges] in Hi. injection Hi as <- <- <-.
     destruct (IH _ m c1 m1 rs1 Hk) as (mf' & Hint & Hmr & Hhid & Hrs).
@@ -654,12 +656,13 @@ Proof.
     apply ranges_avoid_cons; assumption.
   - (* EStore *)
     destruct (store_ok segs (mrestrict H m) a (width_bytes n)) eqn:Hso; [|discriminate].
+    destruct (ro_free ro a (width_bytes n)) eqn:Hro; [|discriminate].
     destruct (store_ok_restrict _ m a Hso) as [Hfull Hav]. rewrite Hfull.
     assert (Hlen : length (Z_to_le_bytes (width_bytes n) (bv_unsigned v)) = width_bytes n)
       by apply length_Z_to_le_bytes.
     rewrite (write_to_mem_restrict (Z_to_le_bytes (width_bytes n) (bv_unsigned v)) m a)
       in Hi by (rewrite Hlen; exact Hav).
-    destruct (interp_eff_accesses segs k
+    destruct (interp_eff_accesses_ro segs ro k
                 (mrestrict H (write_to_mem m a (Z_to_le_bytes (width_bytes n) (bv_unsigned v)))))
       as [[[c1 m1] rs1]| |] eqn:Hk; try discriminate.
     cbn [access_value accessed_ranges] in Hi. injection Hi as <- <- <-.
@@ -687,8 +690,8 @@ Proof.
     unfold unrestrict, restrict. cbn [ms_regs ms_fregs ms_pc_val ms_fcsr ms_resv ms_mem ms_rom ms_svc_pending].
     rewrite munrestrict_mrestrict. destruct ms; reflexivity.
   - destruct (decode_any w) as [[i isz]|]; [|destruct (is_defined_illegal w); discriminate].
-    cbn [ms_regs ms_fregs ms_pc_val ms_fcsr ms_resv ms_mem ms_rom restrict] in Hd.
-    destruct (interp_eff_accesses segs
+    cbn [ms_regs ms_fregs ms_pc_val ms_fcsr ms_resv ms_mem ms_rom ms_ro restrict] in Hd.
+    destruct (interp_eff_accesses_ro segs (ms_ro ms)
                 (exec (Z_to_bv 64 isz) i
                    {| c_regs := ms_regs ms; c_fregs := ms_fregs ms;
                       c_pc := ms_pc_val ms; c_fcsr := ms_fcsr ms;
@@ -696,7 +699,7 @@ Proof.
                 (mrestrict H (ms_mem ms)))
       as [[[c1 m1] rs1]| |] eqn:Hint; try discriminate.
     cbn [access_value accessed_ranges] in Hd. injection Hd as <- <-.
-    destruct (interp_eff_accesses_restrict _ _ c1 m1 rs1 Hint)
+    destruct (interp_eff_accesses_restrict (ms_ro ms) _ _ c1 m1 rs1 Hint)
       as (mf' & Hfull & -> & Hhid & Hrs).
     rewrite Hfull. cbn [access_value accessed_ranges].
     split; [|split; [exact Hrs|]].
@@ -776,7 +779,8 @@ Proof.
     destruct (is_ecall w).
     - injection Hd as <- <-. cbn. repeat split; reflexivity.
     - destruct (decode_any w) as [[i isz]|]; [|destruct (is_defined_illegal w); discriminate].
-      destruct (interp_eff_accesses segs _ _) as [[[c1 m1] rs1]| |]; try discriminate.
+      destruct (interp_eff_accesses_ro segs (ms_ro ms) _ _)
+        as [[[c1 m1] rs1]| |]; try discriminate.
       cbn [access_value accessed_ranges] in Hd. injection Hd as <- <-. cbn in Hsvc.
       exfalso. apply Hsvc. reflexivity. }
   unfold step_accesses in Hs.

@@ -1009,7 +1009,10 @@ Proof.
   - destruct (rel_lit rb rk (Z.of_nat n) kb kk (Z.of_nat w)) as [d| | |].
     + exists []. reflexivity.
     + apply IH.
-    + match goal with |- match (match ?lb with _ => _ end) with _ => _ end => destruct lb; [exists []; reflexivity | exact I] end.
+    + destruct (log_bytes_lit (SE (SA kb kk) w v :: rest) rb rk n);
+        [exists []; reflexivity|].
+      destruct (log_bytes_expr (SE (SA kb kk) w v :: rest) rb rk n);
+        [exists []; reflexivity|exact I].
     + destruct (ranges_apart kn rb rk (Z.of_nat n) kb kk (Z.of_nat w)); [apply IH|].
       destruct hints as [|[|] hs].
       * specialize (IH rb rk n sx (tl (@nil bool)) (SCDisj (SA rb rk) (elen n) (SA kb kk) (elen w) :: acc)).
@@ -2878,6 +2881,141 @@ Proof.
     + cbn [map]. rewrite Hmap. cbn [map] in Hb8'. injection Hb8' as Hb8''. rewrite Hb8''. reflexivity.
 Qed.
 
+Lemma log_byte_expr_sound : forall E base log rb rk e,
+  log_flat E log ->
+  log_byte_expr log rb rk = Some e ->
+  flat E (SA rb rk) 1 ->
+  exists b, rdn segs (mem_denot E base log) (adenot E (SA rb rk)) 1 = Some [b]
+    /\ edenot E e = Z_to_bv 64 (bv_unsigned b).
+Proof.
+  intros E base log.
+  induction log as [|[[kb kk] w v] rest IH]; intros rb rk e Hlf H Hfr;
+    [discriminate|].
+  cbn [log_flat] in Hlf. destruct Hlf as (Hw8 & Hfk & Hlf').
+  cbn [log_byte_expr] in H. cbn [mem_denot].
+  destruct (rel_lit rb rk 1 kb kk (Z.of_nat w)) as [d| | |]
+    eqn:Hrel; try discriminate.
+  - destruct (rel_lit_inside E _ _ _ _ _ _ _ Hrel)
+      as (<- & Hd & Hkk & Hrn & Hst).
+    injection H as <-.
+    exists (Z_to_bv 8 ((bv_unsigned (edenot E v) / 2 ^ (8 * d)) mod 256)).
+    split.
+    + rewrite (rdn_inside_wbytes segs E _ (SA rb kk) w
+        (edenot E v) (SA rb rk) 1 d Hfk Hfr Hst) by lia.
+      rewrite word_byte_at by lia. reflexivity.
+    + rewrite mkExt_denot by lia.
+      rewrite <- (ext_hit_value false d 1 w (edenot E v)) by lia.
+      rewrite word_byte_at by lia.
+      cbn [extz bytes_le_to_Z]. rewrite Z.lor_0_r.
+      reflexivity.
+  - destruct (rel_lit_disjoint E _ _ _ _ _ _ Hrel) as [<- Hdis].
+    destruct (IH rb rk e Hlf' H Hfr) as [b [Hread Hden]].
+    exists b. split; [|exact Hden].
+    rewrite rdn_wbytes_out;
+      [ exact Hread
+      | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk),
+          (flat_u E _ _ Hfr); exact Hdis
+      | rewrite (flat_u E _ _ Hfr); destruct Hfr as (?&?&?&?); lia
+      | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk);
+        destruct Hfk as (?&?&?&?); lia ].
+Qed.
+
+Lemma join_byte_expr_denot : forall E b rest x bs,
+  (length bs < 8)%nat ->
+  edenot E b = Z_to_bv 64 (bv_unsigned x) ->
+  edenot E rest = Z_to_bv 64 (bytes_le_to_Z bs) ->
+  edenot E (EAlu ALU_OR b (EAlu ALU_SLL rest (ELit 8))) =
+    Z_to_bv 64 (bytes_le_to_Z (x :: bs)).
+Proof.
+  intros E b rest x bs Hlen Hb Hrest.
+  pose proof (u8_range x) as Hx.
+  pose proof (bytes_le_to_Z_bound bs) as Hbs.
+  pose proof (bytes_le_to_Z_bound (x :: bs)) as Hwhole.
+  assert (Hbs64 : (0 <= bytes_le_to_Z bs * 256 < 2 ^ 64)%Z).
+  { assert (2 ^ (8 * Z.of_nat (length bs)) <= 2 ^ 56)%Z.
+    { apply Z.pow_le_mono_r; lia. }
+    change (2 ^ 56)%Z with 72057594037927936%Z in *.
+    change (2 ^ 64)%Z with 18446744073709551616%Z.
+    nia. }
+  assert (Hwhole64 : (0 <= bytes_le_to_Z (x :: bs) < 2 ^ 64)%Z).
+  { assert (2 ^ (8 * Z.of_nat (length (x :: bs))) <= 2 ^ 64)%Z.
+    { apply Z.pow_le_mono_r; cbn [length]; lia. }
+    lia. }
+  apply bv_eq.
+  cbn [edenot]. rewrite u_or64, u_sll64.
+  rewrite Hb, Hrest.
+  change (bv_unsigned (Z_to_bv 64 8)) with 8%Z.
+  rewrite !u_lit64. unfold two64.
+  replace (8 mod 64)%Z with 8%Z by reflexivity.
+  change (2 ^ 8)%Z with 256%Z.
+  rewrite (Z.mod_small (bv_unsigned x) (2 ^ 64)) by lia.
+  rewrite (Z.mod_small (bytes_le_to_Z bs) (2 ^ 64)) by nia.
+  rewrite (Z.mod_small (bytes_le_to_Z bs * 256) (2 ^ 64)) by lia.
+  rewrite (Z.mod_small (bytes_le_to_Z (x :: bs)) (2 ^ 64)) by lia.
+  cbn [bytes_le_to_Z]. rewrite Z.shiftl_mul_pow2 by lia.
+  reflexivity.
+Qed.
+
+Lemma log_bytes_expr_sound : forall E base log rb n rk e,
+  log_flat E log ->
+  log_bytes_expr log rb rk n = Some e ->
+  (n <= 8)%nat -> flat E (SA rb rk) (Z.of_nat n) ->
+  exists bs, rdn segs (mem_denot E base log) (adenot E (SA rb rk)) n = Some bs
+    /\ length bs = n /\ edenot E e = Z_to_bv 64 (bytes_le_to_Z bs).
+Proof.
+  intros E base log rb n.
+  induction n as [|n IH]; intros rk e Hlf H Hn Hfr.
+  - cbn [log_bytes_expr] in H. injection H as <-.
+    exists []. repeat split; reflexivity.
+  - cbn [log_bytes_expr] in H.
+    destruct (log_byte_expr log rb rk) as [bexpr|] eqn:Hb;
+      [|discriminate].
+    destruct (log_bytes_expr log rb (rk + 1) n) as [tail|] eqn:Htail;
+      [|discriminate].
+    injection H as <-.
+    assert (Hf1 : flat E (SA rb rk) 1)
+      by (unfold flat, estart in *; cbn [a_base a_off] in *; lia).
+    destruct (log_byte_expr_sound E base log rb rk bexpr Hlf Hb Hf1)
+      as [b [Hread Hval]].
+    destruct n as [|n'].
+    { cbn [log_bytes_expr] in Htail. injection Htail as <-.
+      exists [b]. split; [exact Hread|].
+      split; [reflexivity|].
+      eapply join_byte_expr_denot;
+        [cbn; lia|exact Hval|reflexivity]. }
+    assert (Hfn : flat E (SA rb (rk + 1)) (Z.of_nat (S n')))
+      by (unfold flat, estart in *; cbn [a_base a_off] in *; lia).
+    destruct (IH (rk + 1)%Z tail Hlf Htail ltac:(lia) Hfn)
+      as [bs [Hbs [Hlen Htailval]]].
+    exists (b :: bs). split.
+    + apply rdn_cons1; [exact Hread|].
+      replace (adenot E (SA rb rk) + 1)
+        with (adenot E (SA rb (rk + 1))); [exact Hbs|].
+      unfold adenot, v_addi. cbn [a_base a_off].
+      rewrite w_add_1, Z_to_bv_unsigned, Z_to_bv64_wrap_l.
+      f_equal. lia.
+    + split; [cbn [length]; lia|].
+      eapply join_byte_expr_denot;
+        [rewrite Hlen; lia|exact Hval|exact Htailval].
+Qed.
+
+Lemma ext_val_packed : forall sx n z,
+  (n <= 8)%nat -> (0 <= z < 2 ^ (8 * Z.of_nat n))%Z ->
+  ext_val sx 0 n (Z_to_bv 64 z) = Z_to_bv 64 (extz sx n z).
+Proof.
+  intros sx n z Hn Hz.
+  assert (Hz64 : (0 <= z < 2 ^ 64)%Z).
+  { split; [lia|].
+    eapply Z.lt_le_trans; [exact (proj2 Hz)|].
+    apply Z.pow_le_mono_r; lia. }
+  unfold ext_val, ext_Z, extz.
+  change (2 ^ (8 * Z.of_nat 0))%Z with 1%Z.
+  rewrite Z.div_1_r, u_lit64, two64_eq.
+  rewrite (Z.mod_small z (2 ^ 64)) by exact Hz64.
+  rewrite (Z.mod_small z (2 ^ (8 * Z.of_nat n))) by exact Hz.
+  reflexivity.
+Qed.
+
 Lemma log_lookup_sound : forall E base kn log rb rk n sx hints acc,
   know_ok segs E base kn ->
   log_flat E log -> (1 <= n)%nat -> (n <= 8)%nat ->
@@ -2917,15 +3055,28 @@ Proof.
        | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk), (flat_u E _ _ Hfr); exact Hdis
        | rewrite (flat_u E _ _ Hfr); destruct Hfr as (?&?&?&?); lia
        | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk); destruct Hfk as (?&?&?&?); lia ]).
-  - (* same base, partial overlap: composed bytewise from literal entries (P-b) *)
-    match goal with |- match (match ?lb with _ => _ end) with _ => _ end => destruct lb as [zs|] eqn:Hbl; [|exact I] end.
-    intros Hscs Hfr.
-    destruct (log_bytes_lit_sound E base (SE (SA kb kk) w v :: rest) rb n rk zs
-                ltac:(cbn [log_flat]; split; [exact Hw8 | split; [exact Hfk | exact Hlf']]) Hbl Hfr) as (bs & Hbs & Hmap).
-    cbn [mem_denot] in Hbs.
-    exists bs. split; [exact Hbs | split].
-    + exact (rdn_length _ _ _ _ _ Hbs).
-    + cbn [edenot]. unfold lit_of_bytes. rewrite <- Hmap, zbytes_map. unfold extz. reflexivity.
+  - (* same base, partial overlap: compose definite bytes from the log *)
+    destruct (log_bytes_lit (SE (SA kb kk) w v :: rest) rb rk n)
+      as [zs|] eqn:Hbl.
+    + intros Hscs Hfr.
+      destruct (log_bytes_lit_sound E base (SE (SA kb kk) w v :: rest) rb n rk zs
+                  ltac:(cbn [log_flat]; split; [exact Hw8 | split; [exact Hfk | exact Hlf']]) Hbl Hfr) as (bs & Hbs & Hmap).
+      cbn [mem_denot] in Hbs.
+      exists bs. split; [exact Hbs | split].
+      * exact (rdn_length _ _ _ _ _ Hbs).
+      * cbn [edenot]. unfold lit_of_bytes. rewrite <- Hmap, zbytes_map. unfold extz. reflexivity.
+    + destruct (log_bytes_expr (SE (SA kb kk) w v :: rest) rb rk n)
+        as [e|] eqn:Hbe; [|exact I].
+      intros Hscs Hfr.
+      destruct (log_bytes_expr_sound E base
+        (SE (SA kb kk) w v :: rest) rb n rk e
+        ltac:(cbn [log_flat]; split; [exact Hw8 | split; [exact Hfk | exact Hlf']])
+        Hbe Hn8 Hfr) as (bs & Hbs & Hlen & Hval).
+      cbn [mem_denot] in Hbs.
+      exists bs. split; [exact Hbs|]. split; [exact Hlen|].
+      rewrite mkExt_denot by exact Hn8.
+      rewrite Hval. symmetry. apply ext_val_packed; [exact Hn8|].
+      rewrite <- Hlen. apply bytes_le_to_Z_bound.
   - (* other base: decided by ranges, or hint *)
     destruct (ranges_apart kn rb rk (Z.of_nat n) kb kk (Z.of_nat w)) eqn:Hap.
     { pose proof (ranges_apart_sound segs E base kn _ _ _ _ _ _ Hkn Hap) as Hdis.
@@ -3294,6 +3445,98 @@ Proof.
       replace (adenot E (SA rb rk) + 1) with (adenot E (SA rb (rk + 1))); [exact Hn|].
       unfold adenot, v_addi. cbn [a_base a_off]. rewrite w_add_1, Z_to_bv_unsigned, Z_to_bv64_wrap_l. f_equal. lia.
     + cbn [map]. rewrite Hmap. cbn [map] in Hb8'. injection Hb8' as Hb8''. rewrite Hb8''. reflexivity.
+Qed.
+
+Lemma log_base_byte_lit_sound : forall E base kn log rb rk b,
+  know_ok segs E base kn -> log_flat E log ->
+  log_base_byte_lit segs kn log rb rk = Some b ->
+  flat E (SA rb rk) 1 ->
+  rdn segs (mem_denot E base log) (adenot E (SA rb rk)) 1 =
+    Some [Z_to_bv 8 b] /\ (0 <= b < 256)%Z.
+Proof.
+  intros E base kn log. induction log as [|[[kb kk] w v] rest IH];
+    intros rb rk b Hkn Hlf H Hfr.
+  - cbn [log_base_byte_lit mem_denot] in H.
+    exact (know_byte_lit_sound E base kn rb rk b Hkn H Hfr).
+  - cbn [log_flat] in Hlf. destruct Hlf as (Hw8 & Hfk & Hlf').
+    cbn [log_base_byte_lit] in H. cbn [mem_denot].
+    destruct (rel_lit rb rk 1 kb kk (Z.of_nat w)) as [d| | |]
+      eqn:Hrel; try discriminate.
+    + destruct (rel_lit_inside E _ _ _ _ _ _ _ Hrel)
+        as (<- & Hd & Hkk & Hrn & Hst).
+      destruct v as [z| | | | | | |]; try discriminate.
+      injection H as <-.
+      split; [|apply Z.mod_pos_bound; lia].
+      rewrite (rdn_inside_wbytes segs E _ (SA rb kk) w
+        (edenot E (ELit z)) (SA rb rk) 1 d Hfk Hfr Hst) by lia.
+      rewrite word_byte_at by lia. cbn [edenot].
+      rewrite u_lit64. reflexivity.
+    + destruct (rel_lit_disjoint E _ _ _ _ _ _ Hrel) as [<- Hdis].
+      destruct (IH rb rk b Hkn Hlf' H Hfr) as [IH1 IH2].
+      split; [|exact IH2].
+      rewrite rdn_wbytes_out;
+        [exact IH1
+        | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk),
+            (flat_u E _ _ Hfr); exact Hdis
+        | rewrite (flat_u E _ _ Hfr);
+          destruct Hfr as (?&?&?&?); cbn [Z.of_nat]; lia
+        | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk);
+          destruct Hfk as (?&?&?&?); lia].
+    + destruct (ranges_apart (facts_of kn) rb rk 1 kb kk (Z.of_nat w))
+        eqn:Hapart; [|discriminate].
+      pose proof (ranges_apart_sound segs E base (facts_of kn)
+        rb rk 1 kb kk (Z.of_nat w)
+        (facts_of_ok segs E base kn Hkn) Hapart) as Hdis.
+      destruct (IH rb rk b Hkn Hlf' H Hfr) as [IH1 IH2].
+      split; [|exact IH2].
+      rewrite rdn_wbytes_out;
+        [exact IH1
+        | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk),
+            (flat_u E _ _ Hfr); exact Hdis
+        | rewrite (flat_u E _ _ Hfr);
+          destruct Hfr as (?&?&?&?); cbn [Z.of_nat]; lia
+        | rewrite length_N_to_le_bytes, (flat_u E _ _ Hfk);
+          destruct Hfk as (?&?&?&?); lia].
+Qed.
+
+Lemma log_base_bytes_lit_sound : forall E base kn log rb n rk zs,
+  know_ok segs E base kn -> log_flat E log ->
+  log_base_bytes_lit segs kn log rb rk n = Some zs ->
+  flat E (SA rb rk) (Z.of_nat n) ->
+  exists bs, rdn segs (mem_denot E base log)
+      (adenot E (SA rb rk)) n = Some bs /\ map bv_unsigned bs = zs.
+Proof.
+  intros E base kn log rb n. induction n as [|n IH];
+    intros rk zs Hkn Hlf H Hfr.
+  - cbn in H. injection H as <-. exists []. split; reflexivity.
+  - cbn [log_base_bytes_lit] in H.
+    destruct (log_base_byte_lit segs kn log rb rk) as [b|] eqn:Hb;
+      [|discriminate].
+    destruct (log_base_bytes_lit segs kn log rb (rk + 1) n)
+      as [r|] eqn:Hr; [|discriminate].
+    injection H as <-.
+    assert (Hf1 : flat E (SA rb rk) 1)
+      by (unfold flat, estart in *; cbn [a_base a_off] in *; lia).
+    destruct (log_base_byte_lit_sound E base kn log rb rk b
+      Hkn Hlf Hb Hf1) as [H1 Hb8].
+    assert (Hb8' : map bv_unsigned [Z_to_bv 8 b] = [b]).
+    { cbn [map]. f_equal. rewrite Z_to_bv_unsigned.
+      apply bv_wrap_small. change (bv_modulus 8) with 256%Z. lia. }
+    destruct n as [|n'].
+    { cbn in Hr. injection Hr as <-. exists [Z_to_bv 8 b].
+      split; [exact H1 | exact Hb8']. }
+    assert (Hfn : flat E (SA rb (rk + 1)) (Z.of_nat (S n')))
+      by (unfold flat, estart in *; cbn [a_base a_off] in *; lia).
+    destruct (IH (rk + 1)%Z r Hkn Hlf Hr Hfn) as (bs' & Hn & Hmap).
+    exists (Z_to_bv 8 b :: bs'). split.
+    + apply rdn_cons1; [exact H1|].
+      replace (adenot E (SA rb rk) + 1)
+        with (adenot E (SA rb (rk + 1))); [exact Hn|].
+      unfold adenot, v_addi. cbn [a_base a_off].
+      rewrite w_add_1, Z_to_bv_unsigned, Z_to_bv64_wrap_l.
+      f_equal. lia.
+    + cbn [map]. rewrite Hmap. cbn [map] in Hb8'.
+      injection Hb8' as Hb8''. rewrite Hb8''. reflexivity.
 Qed.
 
 Lemma know_lookupA_sound : forall E M0 allkn base kn rb rk n sx hints acc,
@@ -5005,7 +5248,7 @@ Proof.
   unfold sym_read in Hs.
   pose proof (log_lookup_sound segs E base fk (s_log ss) (a_base a) (a_off a) n sx' (sc_hints scr) [] Hfk Hlf Hn1 Hn8) as HL.
   destruct (log_lookup fk (s_log ss) (a_base a) (a_off a) n sx' (sc_hints scr) []) as [v0 lscs lh|lscs lh|] eqn:Hll;
-    [ | | discriminate].
+    [ | | ].
   - (* log hit *)
     injection Hs as <- <- <- <-.
     apply (flat_sc_sound segs E base fk _ _ _ Hfk Hn1 Hn8) in Hsc as [Hfl Hsc].
@@ -5039,6 +5282,23 @@ Proof.
       assert (Hrd' : rdn segs mem (adenot E a) n = Some bs).
       { destruct a; cbn [a_base a_off] in *. unfold mem. rewrite (HL Hlscs Hfl). exact Hrd. }
       exists bs. split; [exact Hrd'|]. split; [exact (rdn_length _ _ _ _ _ Hrd')|]. exact Hval.
+  - (* partial log read with literal base bytes *)
+    destruct (log_base_bytes_lit segs (s_know ss) (s_log ss)
+      (a_base a) (a_off a) n) as [zs|] eqn:Hmix;
+      [|discriminate].
+    injection Hs as <- <- <- <-.
+    replace (flat_sc fk a n) with (flat_sc fk a n ++ []) in Hsc
+      by apply app_nil_r.
+    apply (flat_sc_sound segs E base fk _ _ _ Hfk Hn1 Hn8)
+      in Hsc as [Hfl _].
+    split; [exact Hfl|].
+    destruct (log_base_bytes_lit_sound segs E base (s_know ss) (s_log ss)
+      (a_base a) n (a_off a) zs Hkn Hlf Hmix
+      ltac:(destruct a; exact Hfl)) as (bs & Hrd & Hmap).
+    exists bs. split; [destruct a; exact Hrd|].
+    split; [exact (rdn_length _ _ _ _ _ Hrd)|].
+    cbn [edenot]. unfold lit_of_bytes. rewrite <- Hmap, zbytes_map.
+    unfold extz. reflexivity.
 Qed.
 
 (** Writability of [n] bytes at [a] (in the BASE memory) from [storeok_sc]. *)
@@ -5157,20 +5417,20 @@ Qed.
 (** *** Per-class step soundness (general form, over [mkstR])            *)
 (* ------------------------------------------------------------------ *)
 
-Lemma sym_step_sound_load : forall E base rom ss regs sz sx rd rs imm ss' scs scr scr' w,
+Lemma sym_step_sound_load_size : forall E base rom ss regs sz sx rd rs imm ss' scs scr scr' w {isz : Z},
   fetch_word segs (Z_to_bv 64 (s_pc ss)) = Some w ->
   is_ecall w = false ->
-  decode_any w = Some (Load sz sx rd rs imm, 4%Z) ->
-  sym_step segs (Load sz sx rd rs imm) ss scr = SOk ss' scs scr' ->
+  decode_any w = Some (Load sz sx rd rs imm, isz) ->
+  sym_step_size segs isz (Load sz sx rd rs imm) ss scr = SOk ss' scs scr' ->
   scs_denot segs base E scs ->
   regs_ok E (s_regs ss) regs -> log_flat E (s_log ss) -> know_ok segs E base (s_know ss) ->
   exists ms', RiscvSemantics.step segs (mkstR regs (Z_to_bv 64 (s_pc ss)) (mem_denot E base (s_log ss)) rom
                                               (resv_denot E (s_resv ss))) = MachineOk ms'
               /\ st_okR E base rom ss' ms'.
 Proof.
-  intros E base rom ss regs sz sx rd rs imm ss' scs scr scr' w Hf He Hd Hs Hsc Hregs Hlf Hkn.
+  intros E base rom ss regs sz sx rd rs imm ss' scs scr scr' w isz Hf He Hd Hs Hsc Hregs Hlf Hkn.
   set (mem := mem_denot E base (s_log ss)) in *.
-  cbn [sym_step] in Hs.
+  cbn [sym_step_size] in Hs.
   pose proof (facts_of_ok segs E base _ Hkn) as Hfk. set (fk := facts_of (s_know ss)) in *.
   set (n := msize_bytes sz) in Hs.
   set (sx' := match sz with SZ8 => false | _ => sx end) in Hs.
@@ -5193,20 +5453,20 @@ Proof.
     rewrite load_result_val by exact Hlen. rewrite <- Hsx. fold n. symmetry. exact Hval.
 Qed.
 
-Lemma sym_step_sound_store : forall E base rom ss regs sz rs1 rs2 imm ss' scs scr scr' w,
+Lemma sym_step_sound_store_size : forall E base rom ss regs sz rs1 rs2 imm ss' scs scr scr' w {isz : Z},
   fetch_word segs (Z_to_bv 64 (s_pc ss)) = Some w ->
   is_ecall w = false ->
-  decode_any w = Some (Store sz rs1 rs2 imm, 4%Z) ->
-  sym_step segs (Store sz rs1 rs2 imm) ss scr = SOk ss' scs scr' ->
+  decode_any w = Some (Store sz rs1 rs2 imm, isz) ->
+  sym_step_size segs isz (Store sz rs1 rs2 imm) ss scr = SOk ss' scs scr' ->
   scs_denot segs base E scs ->
   regs_ok E (s_regs ss) regs -> log_flat E (s_log ss) -> know_ok segs E base (s_know ss) ->
   exists ms', RiscvSemantics.step segs (mkstR regs (Z_to_bv 64 (s_pc ss)) (mem_denot E base (s_log ss)) rom
                                               (resv_denot E (s_resv ss))) = MachineOk ms'
               /\ st_okR E base rom ss' ms'.
 Proof.
-  intros E base rom ss regs sz rs1 rs2 imm ss' scs scr scr' w Hf He Hd Hs Hsc Hregs Hlf Hkn.
+  intros E base rom ss regs sz rs1 rs2 imm ss' scs scr scr' w isz Hf He Hd Hs Hsc Hregs Hlf Hkn.
   set (mem := mem_denot E base (s_log ss)) in *.
-  cbn [sym_step] in Hs.
+  cbn [sym_step_size] in Hs.
   pose proof (facts_of_ok segs E base _ Hkn) as Hfk. set (fk := facts_of (s_know ss)) in *.
   set (n := msize_bytes sz) in *.
   set (a := to_saddrK fk (sr_get (s_regs ss) rs1) (bv_signed imm)) in *.
@@ -5228,20 +5488,20 @@ Proof.
       cbn [log_flat]. split; [exact Hn8|]. split; [exact Hfl | exact Hlf].
 Qed.
 
-Lemma sym_step_sound_lr : forall E base rom ss regs wd aq rl rd rs ss' scs scr scr' w,
+Lemma sym_step_sound_lr_size : forall E base rom ss regs wd aq rl rd rs ss' scs scr scr' w {isz : Z},
   fetch_word segs (Z_to_bv 64 (s_pc ss)) = Some w ->
   is_ecall w = false ->
-  decode_any w = Some (Lr wd aq rl rd rs, 4%Z) ->
-  sym_step segs (Lr wd aq rl rd rs) ss scr = SOk ss' scs scr' ->
+  decode_any w = Some (Lr wd aq rl rd rs, isz) ->
+  sym_step_size segs isz (Lr wd aq rl rd rs) ss scr = SOk ss' scs scr' ->
   scs_denot segs base E scs ->
   regs_ok E (s_regs ss) regs -> log_flat E (s_log ss) -> know_ok segs E base (s_know ss) ->
   exists ms', RiscvSemantics.step segs (mkstR regs (Z_to_bv 64 (s_pc ss)) (mem_denot E base (s_log ss)) rom
                                               (resv_denot E (s_resv ss))) = MachineOk ms'
               /\ st_okR E base rom ss' ms'.
 Proof.
-  intros E base rom ss regs wd aq rl rd rs ss' scs scr scr' w Hf He Hd Hs Hsc Hregs Hlf Hkn.
+  intros E base rom ss regs wd aq rl rd rs ss' scs scr scr' w isz Hf He Hd Hs Hsc Hregs Hlf Hkn.
   set (mem := mem_denot E base (s_log ss)) in *.
-  cbn [sym_step] in Hs.
+  cbn [sym_step_size] in Hs.
   pose proof (facts_of_ok segs E base _ Hkn) as Hfk. set (fk := facts_of (s_know ss)) in *.
   set (n := msize_bytes (amo_sz wd)) in Hs.
   destruct (amo_alignedb fk (sr_get (s_regs ss) rs) wd) eqn:Hal; [|discriminate].
@@ -5266,20 +5526,20 @@ Proof.
     fold n. symmetry. exact Hval.
 Qed.
 
-Lemma sym_step_sound_sc : forall E base rom ss regs wd aq rl rd rs1 rs2 ss' scs scr scr' w,
+Lemma sym_step_sound_sc_size : forall E base rom ss regs wd aq rl rd rs1 rs2 ss' scs scr scr' w {isz : Z},
   fetch_word segs (Z_to_bv 64 (s_pc ss)) = Some w ->
   is_ecall w = false ->
-  decode_any w = Some (Sc wd aq rl rd rs1 rs2, 4%Z) ->
-  sym_step segs (Sc wd aq rl rd rs1 rs2) ss scr = SOk ss' scs scr' ->
+  decode_any w = Some (Sc wd aq rl rd rs1 rs2, isz) ->
+  sym_step_size segs isz (Sc wd aq rl rd rs1 rs2) ss scr = SOk ss' scs scr' ->
   scs_denot segs base E scs ->
   regs_ok E (s_regs ss) regs -> log_flat E (s_log ss) -> know_ok segs E base (s_know ss) ->
   exists ms', RiscvSemantics.step segs (mkstR regs (Z_to_bv 64 (s_pc ss)) (mem_denot E base (s_log ss)) rom
                                               (resv_denot E (s_resv ss))) = MachineOk ms'
               /\ st_okR E base rom ss' ms'.
 Proof.
-  intros E base rom ss regs wd aq rl rd rs1 rs2 ss' scs scr scr' w Hf He Hd Hs Hsc Hregs Hlf Hkn.
+  intros E base rom ss regs wd aq rl rd rs1 rs2 ss' scs scr scr' w isz Hf He Hd Hs Hsc Hregs Hlf Hkn.
   set (mem := mem_denot E base (s_log ss)) in *.
-  cbn [sym_step] in Hs.
+  cbn [sym_step_size] in Hs.
   pose proof (facts_of_ok segs E base _ Hkn) as Hfk. set (fk := facts_of (s_know ss)) in *.
   set (n := msize_bytes (amo_sz wd)) in *.
   destruct (amo_alignedb fk (sr_get (s_regs ss) rs1) wd) eqn:Hal; [|discriminate].
@@ -5306,20 +5566,20 @@ Proof.
       cbn [log_flat]. split; [exact Hn8|]. split; [exact Hfl | exact Hlf].
 Qed.
 
-Lemma sym_step_sound_amo : forall E base rom ss regs op wd aq rl rd rs1 rs2 ss' scs scr scr' w,
+Lemma sym_step_sound_amo_size : forall E base rom ss regs op wd aq rl rd rs1 rs2 ss' scs scr scr' w {isz : Z},
   fetch_word segs (Z_to_bv 64 (s_pc ss)) = Some w ->
   is_ecall w = false ->
-  decode_any w = Some (Amo op wd aq rl rd rs1 rs2, 4%Z) ->
-  sym_step segs (Amo op wd aq rl rd rs1 rs2) ss scr = SOk ss' scs scr' ->
+  decode_any w = Some (Amo op wd aq rl rd rs1 rs2, isz) ->
+  sym_step_size segs isz (Amo op wd aq rl rd rs1 rs2) ss scr = SOk ss' scs scr' ->
   scs_denot segs base E scs ->
   regs_ok E (s_regs ss) regs -> log_flat E (s_log ss) -> know_ok segs E base (s_know ss) ->
   exists ms', RiscvSemantics.step segs (mkstR regs (Z_to_bv 64 (s_pc ss)) (mem_denot E base (s_log ss)) rom
                                               (resv_denot E (s_resv ss))) = MachineOk ms'
               /\ st_okR E base rom ss' ms'.
 Proof.
-  intros E base rom ss regs op wd aq rl rd rs1 rs2 ss' scs scr scr' w Hf He Hd Hs Hsc Hregs Hlf Hkn.
+  intros E base rom ss regs op wd aq rl rd rs1 rs2 ss' scs scr scr' w isz Hf He Hd Hs Hsc Hregs Hlf Hkn.
   set (mem := mem_denot E base (s_log ss)) in *.
-  cbn [sym_step] in Hs.
+  cbn [sym_step_size] in Hs.
   pose proof (facts_of_ok segs E base _ Hkn) as Hfk. set (fk := facts_of (s_know ss)) in *.
   destruct (amo_aluop op) as [aop|] eqn:Hop; [|discriminate].
   set (n := msize_bytes (amo_sz wd)) in *.
@@ -5370,26 +5630,26 @@ Ltac alu_case STEP DEN :=
       end
   end.
 
-Lemma sym_step_soundR : forall E base rom ss ms i ss' scs scr scr' w,
+Lemma sym_step_soundR_size : forall E base rom ss ms i ss' scs scr scr' w {isz : Z},
   fetch_word segs (Z_to_bv 64 (s_pc ss)) = Some w ->
   is_ecall w = false ->
-  decode_any w = Some (i, 4%Z) ->
-  sym_step segs i ss scr = SOk ss' scs scr' ->
+  decode_any w = Some (i, isz) ->
+  sym_step_size segs isz i ss scr = SOk ss' scs scr' ->
   scs_denot segs base E scs ->
   st_okR E base rom ss ms ->
   exists ms', RiscvSemantics.step segs ms = MachineOk ms'
               /\ st_okR E base rom ss' ms'.
 Proof.
-  intros E base rom ss ms i ss' scs scr scr' w Hf He Hd Hs Hsc (regs & -> & Hregs & Hlf & Hkn).
+  intros E base rom ss ms i ss' scs scr scr' w isz Hf He Hd Hs Hsc (regs & -> & Hregs & Hlf & Hkn).
   destruct i;
-    try (eapply sym_step_sound_load; eassumption);
-    try (eapply sym_step_sound_store; eassumption);
-    try (eapply sym_step_sound_lr; eassumption);
-    try (eapply sym_step_sound_sc; eassumption);
-    try (eapply sym_step_sound_amo; eassumption);
+    try (eapply sym_step_sound_load_size; eassumption);
+    try (eapply sym_step_sound_store_size; eassumption);
+    try (eapply sym_step_sound_lr_size; eassumption);
+    try (eapply sym_step_sound_sc_size; eassumption);
+    try (eapply sym_step_sound_amo_size; eassumption);
     set (mem := mem_denot E base (s_log ss)) in *;
     set (rv := resv_denot E (s_resv ss)) in *;
-    cbn [sym_step] in Hs; try discriminate;
+    cbn [sym_step_size] in Hs; try discriminate;
     pose proof (facts_of_ok segs E base _ Hkn) as Hfk; set (fk := facts_of (s_know ss)) in *.
   - (* Lui *)
     alu_case ltac:(exact (stepR_lui segs regs _ mem rom rv w rd imm Hf He Hd))
@@ -5418,7 +5678,7 @@ Proof.
     set (tk := bv_unsigned (Z_to_bv 64 (s_pc ss + bv_signed imm))) in Hs.
     assert (Hcond : forall t, branch_taken c (getr regs rs1) (getr regs rs2) = t ->
               exists ms', RiscvSemantics.step segs (mkstR regs (Z_to_bv 64 (s_pc ss)) mem rom rv) = MachineOk ms'
-                /\ st_okR E base rom (sjump ss (if t then tk else (s_pc ss + 4)%Z)) ms').
+                /\ st_okR E base rom (sjump ss (if t then tk else (s_pc ss + isz)%Z)) ms').
     { intros t Ht. destruct t.
       - eexists; split; [exact (stepR_branch_tk_gen segs regs _ mem rom rv w c rs1 rs2 imm Hf He Hd Ht)|].
         eexists; split; [| split; [exact Hregs | split; [exact Hlf | exact Hkn]]].
@@ -5482,6 +5742,21 @@ Proof.
   - (* Mul32 *)
     alu_case ltac:(exact (stepR_mul32_gen segs regs _ mem rom rv w op rd rs1 rs2 Hf He Hd))
              ltac:(rewrite mkMdw_denot; rewrite <- !Hregs; reflexivity).
+Qed.
+
+Lemma sym_step_soundR : forall E base rom ss ms i ss' scs scr scr' w,
+  fetch_word segs (Z_to_bv 64 (s_pc ss)) = Some w ->
+  is_ecall w = false ->
+  decode_any w = Some (i, 4%Z) ->
+  sym_step segs i ss scr = SOk ss' scs scr' ->
+  scs_denot segs base E scs ->
+  st_okR E base rom ss ms ->
+  exists ms', RiscvSemantics.step segs ms = MachineOk ms'
+              /\ st_okR E base rom ss' ms'.
+Proof.
+  intros E base rom ss ms i ss' scs scr scr' w Hf He Hd Hs Hsc Hst.
+  unfold sym_step in Hs.
+  exact (sym_step_soundR_size E base rom ss ms i ss' scs scr scr' w Hf He Hd Hs Hsc Hst).
 Qed.
 
 (** The historical statement (block-boundary [st_ok] in, general out). *)
@@ -5859,6 +6134,78 @@ Proof.
   - rewrite Hck. reflexivity.
   - exact Hr.
 Qed.
+
+(** Table execution with two- and four-byte instructions. *)
+Lemma sym_execTC_go_sound : forall t fuel first stops ss ck E base rom,
+  itabC_sound segs t ->
+  sym_execTC_go segs t fuel first stops ss ck = ck \/
+  (let r := sym_execTC_go segs t fuel first stops ss ck in
+   s_resv r = None /\
+   (forall ms, st_okR segs E base rom ss ms -> exists mr, msteps segs ms mr /\ st_okR segs E base rom r mr)).
+Proof.
+  intros t fuel. induction fuel as [|f IH]; intros first stops ss ck E base rom Ht.
+  - cbn [sym_execTC_go]. destruct (s_clean ss) eqn:Hc; [right|left; reflexivity].
+    split; [apply s_clean_None; exact Hc|].
+    intros ms Hst. exists ms. split; [apply mst_refl|exact Hst].
+  - assert (Hstop : (if s_clean ss then ss else ck) = ck \/
+            (let r := (if s_clean ss then ss else ck) in
+             s_resv r = None /\
+             (forall ms, st_okR segs E base rom ss ms -> exists mr, msteps segs ms mr /\ st_okR segs E base rom r mr))).
+    { destruct (s_clean ss) eqn:Hc; [right|left; reflexivity].
+      split; [apply s_clean_None; exact Hc|].
+      intros ms Hst. exists ms. split; [apply mst_refl|exact Hst]. }
+    cbn [sym_execTC_go].
+    destruct (negb first && existsb (Z.eqb (s_pc ss)) stops)%bool; [exact Hstop|].
+    destruct (itabC_lookup t (s_pc ss)) as [[i isz]|] eqn:Hl; [|exact Hstop].
+    pose proof (Ht _ _ Hl) as Hen. unfold itabC_entry in Hen.
+    destruct (fetch_word segs (Z_to_bv 64 (s_pc ss))) as [w|] eqn:Hf; [|discriminate].
+    destruct (is_ecall w) eqn:Hec; [discriminate|].
+    destruct (decode_any w) as [[i' sz]|] eqn:Hd; [|discriminate].
+    inversion Hen; subst i' sz; clear Hen.
+    destruct (sym_step_size segs isz i ss scr_nil) as [ss2 scs2 scr2|] eqn:Hstep; [|exact Hstop].
+    destruct scs2 as [|x l]; [|exact Hstop].
+    set (ck' := if s_clean ss2 then ss2 else ck).
+    specialize (IH false stops ss2 ck' E base rom Ht).
+    destruct IH as [Hck|(Hr & Hrun)].
+    + subst ck'. destruct (s_clean ss2) eqn:Hc2.
+      * right. rewrite Hck. split; [apply s_clean_None; exact Hc2|].
+        intros ms Hst.
+        destruct (sym_step_soundR_size segs E base rom ss ms i ss2 [] scr_nil scr2 w Hf Hec Hd Hstep ltac:(constructor) Hst)
+          as (msA & HstepA & HstA).
+        exists msA. split; [|exact HstA].
+        eapply mst_step; [destruct Hst as (rr & -> & _); reflexivity | exact HstepA | apply mst_refl].
+      * left. exact Hck.
+    + right. split; [exact Hr|].
+      intros ms Hst.
+      destruct (sym_step_soundR_size segs E base rom ss ms i ss2 [] scr_nil scr2 w Hf Hec Hd Hstep ltac:(constructor) Hst)
+        as (msA & HstepA & HstA).
+      destruct (Hrun msA HstA) as (mr & Hmr & Hstr).
+      exists mr. split; [|exact Hstr].
+      eapply mst_step; [destruct Hst as (rr & -> & _); reflexivity | exact HstepA | exact Hmr].
+Qed.
+
+Theorem sym_execTC_soundR : forall t fuel first stops ss E base rom ms,
+  itabC_sound segs t ->
+  st_ok segs E base rom ss ms ->
+  s_resv (sym_execTC segs t fuel first stops ss) = None /\
+  exists ms', msteps segs ms ms' /\ st_okR segs E base rom (sym_execTC segs t fuel first stops ss) ms'.
+Proof.
+  intros t fuel first stops ss E base rom ms Ht Hst. unfold sym_execTC.
+  destruct (sym_execTC_go_sound t fuel first stops (clr ss) (clr ss) E base rom Ht) as [Hck|(Hr & Hrun)].
+  - rewrite Hck. split; [reflexivity|]. exists ms. split; [apply mst_refl | apply st_ok_R; exact Hst].
+  - split; [exact Hr|]. apply Hrun. apply st_ok_R. exact Hst.
+Qed.
+
+Theorem sym_execTC_sound : forall t fuel first stops ss E base rom ms,
+  itabC_sound segs t ->
+  st_ok segs E base rom ss ms ->
+  exists ms', msteps segs ms ms' /\ st_ok segs E base rom (sym_execTC segs t fuel first stops ss) ms'.
+Proof.
+  intros t fuel first stops ss E base rom ms Ht Hst.
+  destruct (sym_execTC_soundR t fuel first stops ss E base rom ms Ht Hst) as (Hr & ms' & Hms & Hst').
+  exists ms'. split; [exact Hms | apply st_okR_ok; assumption].
+Qed.
+
 
 End ExecSound.
 
@@ -6256,19 +6603,19 @@ Qed.
 
 (** ---- one extension-mode step --------------------------------------------- *)
 
-Lemma sym_stepX_sound : forall K E base rom ss ms i ssx scr' w,
+Lemma sym_stepX_sound_size : forall K E base rom ss ms i ssx scr' w {isz : Z},
   fetch_word segs (Z_to_bv 64 (s_pc ss)) = Some w ->
   is_ecall w = false ->
-  decode_any w = Some (i, 4%Z) ->
-  sym_stepX segs K i ss scr_nil = SOk ssx [] scr' ->
+  decode_any w = Some (i, isz) ->
+  sym_stepX_size segs K isz i ss scr_nil = SOk ssx [] scr' ->
   st_okX E base rom ss ms ->
   exists E' ms', eagree (s_next ss) E E'
     /\ (s_next ss <= s_next ssx)%nat
     /\ RiscvSemantics.step segs ms = MachineOk ms'
     /\ st_okX E' base rom ssx ms'.
 Proof.
-  intros K E base rom ss ms i ssx scr' w Hf He Hd H HX. unfold sym_stepX in H.
-  destruct (sym_step segs i ss scr_nil) as [ss' scs scr2|] eqn:Hst; [|discriminate].
+  intros K E base rom ss ms i ssx scr' w isz Hf He Hd H HX. unfold sym_stepX_size in H.
+  destruct (sym_step_size segs isz i ss scr_nil) as [ss' scs scr2|] eqn:Hst; [|discriminate].
   destruct (Nat.leb (s_next ss) (s_next ss')) eqn:Hle; [|discriminate]. apply Nat.leb_le in Hle.
   injection H as Hss Hfil Hscr. subst ssx scr'.
   set (i0 := s_next ss) in *.
@@ -6306,16 +6653,32 @@ Proof.
       intros a' n' sx' Hrb'. fold i0 in Hrb'. rewrite Hrb in Hrb'. discriminate. }
   destruct HV as (E1 & Ha1 & Hscs).
   (* the classic step, under E1 and under every extension of it *)
-  destruct (sym_step_soundR segs E1 base rom ss ms i ss' scs scr_nil scr2 w Hf He Hd Hst
+  destruct (sym_step_soundR_size segs E1 base rom ss ms i ss' scs scr_nil scr2 w Hf He Hd Hst
               (Hscs E1 (eagree_refl _ _)) (HX E1 Ha1)) as (ms' & Hstep & HR1).
   assert (ALL : forall E'', eagree (s_next ss') E1 E'' -> st_okR segs E'' base rom ss' ms').
   { intros E'' Ha''.
     assert (HaE : eagree i0 E E'') by (eapply eagree_trans; [exact Ha1 | eapply eagree_le; [exact Ha'' | exact Hle]]).
-    destruct (sym_step_soundR segs E'' base rom ss ms i ss' scs scr_nil scr2 w Hf He Hd Hst (Hscs E'' Ha'') (HX E'' HaE))
+    destruct (sym_step_soundR_size segs E'' base rom ss ms i ss' scs scr_nil scr2 w Hf He Hd Hst (Hscs E'' Ha'') (HX E'' HaE))
       as (ms'' & Hstep'' & HR''). rewrite Hstep in Hstep''. injection Hstep'' as <-. exact HR''. }
   destruct (cap_rd_sound K i E1 base rom ss' ms' ALL) as (E' & Ha' & Hle' & HX').
   exists E', ms'. split; [|split; [lia | split; [exact Hstep | exact HX']]].
   eapply eagree_trans; [exact Ha1 | eapply eagree_le; [exact Ha' | exact Hle]].
+Qed.
+
+Lemma sym_stepX_sound : forall K E base rom ss ms i ssx scr' w,
+  fetch_word segs (Z_to_bv 64 (s_pc ss)) = Some w ->
+  is_ecall w = false ->
+  decode_any w = Some (i, 4%Z) ->
+  sym_stepX segs K i ss scr_nil = SOk ssx [] scr' ->
+  st_okX E base rom ss ms ->
+  exists E' ms', eagree (s_next ss) E E'
+    /\ (s_next ss <= s_next ssx)%nat
+    /\ RiscvSemantics.step segs ms = MachineOk ms'
+    /\ st_okX E' base rom ssx ms'.
+Proof.
+  intros K E base rom ss ms i ssx scr' w Hf He Hd H HX.
+  change (sym_stepX_size segs K 4 i ss scr_nil = SOk ssx [] scr') in H.
+  exact (sym_stepX_sound_size K E base rom ss ms i ssx scr' w Hf He Hd H HX).
 Qed.
 
 (** ---- the strict drivers in extension mode ------------------------------- *)
@@ -6411,6 +6774,99 @@ Proof.
     exists E', mr. split; [exact Ha|]. split; [exact Hle|]. split; [exact Hmr|].
     intros E'' Ha''. apply st_okR_ok; [apply HX'; exact Ha'' | exact Hr].
 Qed.
+
+(** Extension mode over mixed instruction sizes. *)
+Lemma sym_execTXC_go_sound : forall t K fuel first stops ss ck base rom,
+  itabC_sound segs t ->
+  sym_execTXC_go segs t K fuel first stops ss ck = ck \/
+  (let r := sym_execTXC_go segs t K fuel first stops ss ck in
+   s_resv r = None /\ (s_next ss <= s_next r)%nat /\
+   (forall E ms, st_okX E base rom ss ms ->
+      exists E' mr, eagree (s_next ss) E E' /\ msteps segs ms mr /\ st_okX E' base rom r mr)).
+Proof.
+  intros t K fuel. induction fuel as [|f IH]; intros first stops ss ck base rom Ht.
+  - cbn [sym_execTXC_go]. destruct (s_clean ss) eqn:Hc; [right|left; reflexivity].
+    split; [apply s_clean_None; exact Hc|]. split; [lia|].
+    intros E ms Hst. exists E, ms. split; [apply eagree_refl|]. split; [apply mst_refl|exact Hst].
+  - assert (Hstop : (if s_clean ss then ss else ck) = ck \/
+            (let r := (if s_clean ss then ss else ck) in
+             s_resv r = None /\ (s_next ss <= s_next r)%nat /\
+             (forall E ms, st_okX E base rom ss ms ->
+                exists E' mr, eagree (s_next ss) E E' /\ msteps segs ms mr /\ st_okX E' base rom r mr))).
+    { destruct (s_clean ss) eqn:Hc; [right|left; reflexivity].
+      split; [apply s_clean_None; exact Hc|]. split; [lia|].
+      intros E ms Hst. exists E, ms. split; [apply eagree_refl|]. split; [apply mst_refl|exact Hst]. }
+    cbn [sym_execTXC_go].
+    destruct (negb first && existsb (Z.eqb (s_pc ss)) stops)%bool; [exact Hstop|].
+    destruct (itabC_lookup t (s_pc ss)) as [[i isz]|] eqn:Hl; [|exact Hstop].
+    pose proof (Ht _ _ Hl) as Hen. unfold itabC_entry in Hen.
+    destruct (fetch_word segs (Z_to_bv 64 (s_pc ss))) as [w|] eqn:Hf; [|discriminate].
+    destruct (is_ecall w) eqn:Hec; [discriminate|].
+    destruct (decode_any w) as [[i' sz]|] eqn:Hd; [|discriminate].
+    inversion Hen; subst i' sz; clear Hen.
+    destruct (sym_stepX_size segs K isz i ss scr_nil) as [ss2 scs2 scr2|] eqn:Hstep; [|exact Hstop].
+    destruct scs2 as [|x l]; [|exact Hstop].
+    set (ck' := if s_clean ss2 then ss2 else ck).
+    specialize (IH false stops ss2 ck' base rom Ht).
+    assert (ONE : forall E ms, st_okX E base rom ss ms ->
+              exists E' msA, eagree (s_next ss) E E' /\ (s_next ss <= s_next ss2)%nat /\
+                             msteps segs ms msA /\ st_okX E' base rom ss2 msA).
+    { intros E ms Hst.
+      destruct (sym_stepX_sound_size K E base rom ss ms i ss2 scr2 w Hf Hec Hd Hstep Hst) as (E' & msA & Ha & Hle & HstepA & HstA).
+      exists E', msA. split; [exact Ha|]. split; [exact Hle|]. split; [|exact HstA].
+      eapply mst_step; [destruct (st_okX_R _ _ _ _ _ Hst) as (rr & -> & _); reflexivity | exact HstepA | apply mst_refl]. }
+    destruct IH as [Hck|(Hr & Hle2 & Hrun)].
+    + subst ck'. destruct (s_clean ss2) eqn:Hc2.
+      * right. rewrite Hck. split; [apply s_clean_None; exact Hc2|].
+        split.
+        { (* the step's counter bound, read off any run of it: use a trivial valuation *)
+          unfold sym_stepX_size in Hstep. destruct (sym_step_size segs isz i ss scr_nil) as [ss3 scs3 scr3|]; [|discriminate].
+          destruct (Nat.leb (s_next ss) (s_next ss3)) eqn:Hle3; [|discriminate]. apply Nat.leb_le in Hle3.
+          injection Hstep as <- _ _. unfold cap_rd. destruct K; [exact Hle3|].
+          destruct (rd_of i); [|exact Hle3]. destruct (bv_eqb _ _); [exact Hle3|]. destruct (esize_le _ _); [exact Hle3|].
+          cbn [s_next]. lia. }
+        intros E ms Hst. destruct (ONE E ms Hst) as (E' & msA & Ha & _ & Hms & HstA).
+        exists E', msA. split; [exact Ha|]. split; [exact Hms | exact HstA].
+      * left. exact Hck.
+    + right. split; [exact Hr|]. split.
+      { unfold sym_stepX_size in Hstep. destruct (sym_step_size segs isz i ss scr_nil) as [ss3 scs3 scr3|]; [|discriminate].
+        destruct (Nat.leb (s_next ss) (s_next ss3)) eqn:Hle3; [|discriminate]. apply Nat.leb_le in Hle3.
+        assert (s_next ss <= s_next ss2)%nat; [|lia].
+        injection Hstep as <- _ _. unfold cap_rd. destruct K; [exact Hle3|].
+        destruct (rd_of i); [|exact Hle3]. destruct (bv_eqb _ _); [exact Hle3|]. destruct (esize_le _ _); [exact Hle3|].
+        cbn [s_next]. lia. }
+      intros E ms Hst.
+      destruct (ONE E ms Hst) as (E' & msA & Ha & Hle & HmsA & HstA).
+      destruct (Hrun E' msA HstA) as (E2 & mr & Ha2 & Hmr & Hstr).
+      exists E2, mr. split; [|split; [eapply msteps_trans; [exact HmsA | exact Hmr] | exact Hstr]].
+      eapply eagree_trans; [exact Ha | eapply eagree_le; [exact Ha2 | exact Hle]].
+Qed.
+
+(** Entry: the block-boundary relation [st_ok] for every valuation agreeing
+    with [E] below [s_next ss] (a state whose symbolic objects mention only
+    variables below its counter; [AxSymRun3.st_okX_entry]).  Exit: some
+    extension [E'] of [E] (the fresh variables valued), the run simulated,
+    and again the relation for every valuation agreeing with [E'] below the
+    new counter — ready for the next block. *)
+Theorem sym_execTXC_sound : forall t K fuel first stops ss E base rom ms,
+  itabC_sound segs t ->
+  (forall E', eagree (s_next ss) E E' -> st_ok segs E' base rom ss ms) ->
+  let ss' := sym_execTXC segs t K fuel first stops ss in
+  exists E' ms', eagree (s_next ss) E E'
+    /\ (s_next ss <= s_next ss')%nat
+    /\ msteps segs ms ms'
+    /\ (forall E'', eagree (s_next ss') E' E'' -> st_ok segs E'' base rom ss' ms').
+Proof.
+  intros t K fuel first stops ss E base rom ms Ht Hst. unfold sym_execTXC.
+  assert (HX : st_okX E base rom (clr ss) ms) by (apply st_okX_clr; exact Hst).
+  destruct (sym_execTXC_go_sound t K fuel first stops (clr ss) (clr ss) base rom Ht) as [Hck|(Hr & Hle & Hrun)].
+  - rewrite Hck. exists E, ms. split; [apply eagree_refl|]. split; [cbn [s_next clr]; lia|].
+    split; [apply mst_refl|]. intros E'' Ha. apply st_okR_ok; [apply HX; exact Ha | reflexivity].
+  - destruct (Hrun E ms HX) as (E' & mr & Ha & Hmr & HX').
+    exists E', mr. split; [exact Ha|]. split; [exact Hle|]. split; [exact Hmr|].
+    intros E'' Ha''. apply st_okR_ok; [apply HX'; exact Ha'' | exact Hr].
+Qed.
+
 
 (** the same facts spelled out for the extension itself *)
 Theorem sym_execTX_ex : forall t K fuel first stops ss E base rom ms,

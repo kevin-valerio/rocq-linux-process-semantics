@@ -150,7 +150,7 @@ Definition demo_input_tmp (fs0 tmp0 : Fs.Fs) (stdin0 : InputStream)
     : ProcInput :=
   mkProcInput_full [] [] fs0 stdin0 demo_uid demo_gid demo_groups
                    net_silent default_nofile (Z_to_bv 64 0) demo_hwcap false
-                   Sv48 default_urandom tmp0.
+                   Sv48 default_urandom tmp0 None None false default_stdio_status.
 
 (** The credentials [demo_input] produces: an ordinary user whose real,
     effective and saved ids all agree, because [State.init_model] derives
@@ -300,7 +300,9 @@ Example fd_truncation_high_low_halves_all_ebadf :
     = CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) [])
     [Z_to_bv 64 (2 ^ 31); Z_to_bv 64 (2 ^ 32 - 1); Z_to_bv 64 (2 ^ 64 - 1);
      Z_to_bv 64 (2 ^ 63 + 2 ^ 32 - 1)].
-Proof. repeat constructor; check_eq. Qed.
+Proof.
+  repeat (apply Forall_cons; [check_eq|]); apply Forall_nil.
+Qed.
 
 (** ...while a LIVE low half is reached however enormous the register:
     fd = 2^63 is stdin, so a write to it is -EBADF for the RIGHT reason

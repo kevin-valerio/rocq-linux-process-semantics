@@ -305,8 +305,7 @@ Example dup_of_a_pipe_end_declines :
      declines above are [File.dup_modeled_entry]'s answer *)
   /\ check_syscall (mkInput 23 [0; 0; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
        (mkEffect 6 [] []) pipe_model
-     = CheckOk (with_fds (fd_insert (m_fds pipe_model) 6 (FdChannel 0))
-                  pipe_model) [].
+     = CheckOk (dup_channel_model 6 (FdChannel 0) false pipe_model) [].
 Proof. repeat split; check_eq. Qed.
 
 (** fcntl (25), F_SETFL — THE ENUMERATION, pinned from both sides, and

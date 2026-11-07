@@ -135,17 +135,20 @@ Definition apply_unmaps (mem : word -> option byte) (us : list (word * word))
 (** Apply symbolic copies against an immutable snapshot of the memory from
     BEFORE this syscall effect.  Destination ranges use list order (later
     copies override earlier ones); every source read uses [before], never a
-    range already zeroed, copied, or unmapped by the effect. *)
+    range already zeroed, copied, or unmapped by the effect.  A read-only
+    operation leaves bytes unchanged; [readonly_ranges] records its range. *)
 Definition apply_copy (before mem : word -> option byte) (c : MemCopy)
     : word -> option byte :=
-  fun a =>
-    if Z.leb (bv_unsigned (copy_dst c)) (bv_unsigned a)
-       && Z.ltb (bv_unsigned a)
-                 (bv_unsigned (copy_dst c) + bv_unsigned (copy_len c))
-    then before (Z_to_bv 64
-           (bv_unsigned (copy_src c)
-            + (bv_unsigned a - bv_unsigned (copy_dst c))))
-    else mem a.
+  match c with
+  | mkCopy src dst len =>
+      fun a =>
+        if Z.leb (bv_unsigned dst) (bv_unsigned a)
+           && Z.ltb (bv_unsigned a) (bv_unsigned dst + bv_unsigned len)
+        then before (Z_to_bv 64
+               (bv_unsigned src + (bv_unsigned a - bv_unsigned dst)))
+        else mem a
+  | mkProtectRO _ _ => mem
+  end.
 
 Fixpoint apply_copies (before mem : word -> option byte) (cs : list MemCopy)
     : word -> option byte :=
@@ -172,6 +175,13 @@ Fixpoint apply_copies (before mem : word -> option byte) (cs : list MemCopy)
     deliberately combines all three symbolic ledgers; the ordering above
     preserves its old prefix.  A brk transition either grows (zeros, no
     unmaps) or shrinks (unmaps, no zeros).) *)
+Fixpoint readonly_ranges (cs : list MemCopy) : list (word * word) :=
+  match cs with
+  | [] => []
+  | mkCopy _ _ _ :: rest => readonly_ranges rest
+  | mkProtectRO addr len :: rest => (addr, len) :: readonly_ranges rest
+  end.
+
 Definition apply_effect (ms : machine_state) (eff : SyscallEffect)
     : machine_state :=
   let ms' := set_reg ms 10 (eff_ret eff) in
@@ -185,7 +195,7 @@ Definition apply_effect (ms : machine_state) (eff : SyscallEffect)
                                 (eff_zeros eff))
                    (eff_copies eff))
                  (eff_writes eff);
-     ms_rom := ms_rom ms' |}.
+     ms_rom := ms_rom ms'; ms_ro := readonly_ranges (eff_copies eff) ++ ms_ro ms' |}.
 
 (** Advance PC past the ecall instruction (+4) and clear svc_pending. *)
 Definition advance_past_svc (ms : machine_state) : machine_state :=
@@ -194,7 +204,7 @@ Definition advance_past_svc (ms : machine_state) : machine_state :=
      ms_svc_pending := None;
      ms_resv := ms_resv ms; ms_fcsr := ms_fcsr ms;
      ms_mem := ms_mem ms;
-     ms_rom := ms_rom ms |}.
+     ms_rom := ms_rom ms; ms_ro := ms_ro ms |}.
 
 (* =========================================================================
    Configurations and the one-step relation
@@ -1094,7 +1104,7 @@ Definition init_machine_state (argv : list (list byte))
        match memory_read mi_loaded_segments addr 1 with
        | Some (b :: _) => Some b
        | _ => None
-       end |}.
+       end; ms_ro := [] |}.
 
 (** The initial configuration for one run of THIS image on the
     caller-supplied inputs [inp]. *)
