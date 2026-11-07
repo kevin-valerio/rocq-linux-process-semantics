@@ -886,6 +886,37 @@ Definition mem_sigaltstack_ok : word -> option byte :=
                       else 0)
            else None.
 
+Definition sigaltstack_read_effect (r : word) : SyscallEffect :=
+  with_copyins [(4096, 24%nat)] (mkEffect r [] []).
+
+Example sigaltstack_install_records_copyin :
+  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_ok
+                   (fun _ => None))
+    (mkEffect 0 [] []) sig_model_blocked = CheckReject /\
+  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_ok
+                   (fun _ => None))
+    (sigaltstack_read_effect 0) sig_model_blocked =
+      CheckOk (with_sigaltstack_installed sig_model_blocked) [].
+Proof. split; vm_compute; reflexivity. Qed.
+
+Definition mem_sigaltstack_bad_mode : word -> option byte :=
+  fun a => if bv_eqb a 4104 then Some 4 else mem_sigaltstack_ok a.
+
+Example sigaltstack_rejection_still_records_copyin :
+  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0]
+                   mem_sigaltstack_bad_mode (fun _ => None))
+    (sigaltstack_read_effect (errno_ret EINVAL)) sig_model_blocked =
+      CheckOk sig_model_blocked [] /\
+  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0]
+                   mem_sigaltstack_bad_mode (fun _ => None))
+    (mkEffect (errno_ret EINVAL) [] []) sig_model_blocked = CheckReject /\
+  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0]
+                   (fun a => if bv_leu 4096 a && bv_ltu a (4096 + 23)
+                             then Some 0 else None) (fun _ => None))
+    (mkEffect (errno_ret EFAULT) [] []) sig_model_blocked =
+      CheckOk sig_model_blocked [].
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
 (** WHAT STANDS IN FOR 132 IN [sig_mask_windows].  132 has an arm, so
     the claim that [rt_sigprocmask]'s [oset] answer cannot go stale has
     to be made, for this number, about what the arm DOES: the
@@ -907,7 +938,7 @@ Definition mem_sigaltstack_ok : word -> option byte :=
 Example sigaltstack_leaves_the_mask_alone :
   check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_ok
                    (fun _ => None))
-    (mkEffect 0 [] []) sig_model_blocked
+    (sigaltstack_read_effect 0) sig_model_blocked
   = CheckOk (with_sigaltstack_installed sig_model_blocked) []
   /\ m_sigmask (with_sigaltstack_installed sig_model_blocked) = sig_entry_mask.
 Proof. split; vm_compute; reflexivity. Qed.
@@ -952,7 +983,7 @@ Definition mem_sigaltstack_small : word -> option byte :=
 Example sigaltstack_enomem_keeps_the_record :
   check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_small
                    (fun _ => None))
-    (mkEffect (errno_ret ENOMEM) [] []) sig_model_blocked
+    (sigaltstack_read_effect (errno_ret ENOMEM)) sig_model_blocked
   = CheckOk sig_model_blocked [].
 Proof. vm_compute. reflexivity. Qed.
 
@@ -967,7 +998,8 @@ Proof. vm_compute. reflexivity. Qed.
 Example sigaltstack_success_admits_no_write :
   check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_ok
                    (fun _ => None))
-    (mkEffect 0 [(4096, [0])] []) sig_model_blocked
+    (with_copyins [(4096, 24%nat)] (mkEffect 0 [(4096, [0])] []))
+    sig_model_blocked
   = CheckReject.
 Proof. vm_compute. reflexivity. Qed.
 
@@ -1016,11 +1048,11 @@ Definition mem_sigaltstack_disable : word -> option byte :=
 Example sigaltstack_disable_leaves_the_record_answerable :
   check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_disable
                    (fun _ => None))
-    (mkEffect 0 [] []) sig_model_blocked
+    (sigaltstack_read_effect 0) sig_model_blocked
   = CheckOk sig_model_blocked []
   /\ check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_small
                      (fun _ => None))
-       (mkEffect (errno_ret ENOMEM) [] []) sig_model_blocked
+       (sigaltstack_read_effect (errno_ret ENOMEM)) sig_model_blocked
      = CheckOk sig_model_blocked []
   /\ check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_small
                      (fun _ => None))
@@ -1041,13 +1073,24 @@ Proof. split; [|split]; vm_compute; reflexivity. Qed.
 Example sigaltstack_install_still_sets_the_bit :
   check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_ok
                    (fun _ => None))
-    (mkEffect 0 [] []) sig_model_blocked
+    (sigaltstack_read_effect 0) sig_model_blocked
   = CheckOk (with_sigaltstack_installed sig_model_blocked) []
   /\ check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_disable
                      (fun _ => None))
-       (mkEffect 0 [] []) sig_model_blocked
+       (sigaltstack_read_effect 0) sig_model_blocked
      <> CheckOk (with_sigaltstack_installed sig_model_blocked) [].
-Proof. split; vm_compute; [reflexivity|discriminate]. Qed.
+Proof.
+  split.
+  - exact (proj2 sigaltstack_install_records_copyin).
+  - rewrite (proj1 sigaltstack_disable_leaves_the_record_answerable).
+    intro H.
+    apply (f_equal (fun r =>
+      match r with
+      | CheckOk m _ => m_sigaltstack_installed m
+      | _ => false
+      end)) in H.
+    cbn in H. discriminate.
+Qed.
 
 (** AND A DISABLE IS NOT A LICENCE, which is what stops the arm above
     from having been widened into "answer anything once disabled".  The
@@ -1059,15 +1102,28 @@ Proof. split; vm_compute; [reflexivity|discriminate]. Qed.
     ADMISSION REASON: the fourth -- a [CheckReject] needs a kernel
     behaving inadmissibly, which no truthful run produces. *)
 Example sigaltstack_after_a_disable_rejects_a_false_success :
-  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_small
-                   (fun _ => None))
-    (mkEffect 0 [] []) sig_model_blocked
+  check_sigaltstack (mkInput 132 [4096; 0; 0; 0; 0; 0]
+                      mem_sigaltstack_small (fun _ => None)) 4096 0
+    (sigaltstack_read_effect 0) sig_model_blocked
   = CheckReject
-  /\ check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_disable
-                     (fun _ => None))
-       (mkEffect 0 [(4096, [0])] []) sig_model_blocked
+  /\ check_sigaltstack (mkInput 132 [4096; 0; 0; 0; 0; 0]
+                         mem_sigaltstack_disable (fun _ => None)) 4096 0
+       (with_copyins [(4096, 24%nat)] (mkEffect 0 [(4096, [0])] []))
+       sig_model_blocked
      = CheckReject.
-Proof. split; vm_compute; reflexivity. Qed.
+Proof.
+  assert (Hreject : forall m, m_sigaltstack_installed m = false ->
+    check_sigaltstack (mkInput 132 [4096; 0; 0; 0; 0; 0]
+                         mem_sigaltstack_small (fun _ => None)) 4096 0
+      (sigaltstack_read_effect 0) m = CheckReject /\
+    check_sigaltstack (mkInput 132 [4096; 0; 0; 0; 0; 0]
+                         mem_sigaltstack_disable (fun _ => None)) 4096 0
+      (with_copyins [(4096, 24%nat)] (mkEffect 0 [(4096, [0])] []))
+      m = CheckReject).
+  { intros m Hm. unfold check_sigaltstack. rewrite Hm.
+    split; vm_compute; reflexivity. }
+  apply Hreject. reflexivity.
+Qed.
 
 Definition sig_oldstack_input (bit : bool) : ProcInput :=
   mkProcInput_full [] [] [] IEof demo_uid demo_gid demo_groups net_silent
@@ -1083,12 +1139,12 @@ Definition mem_sigaltstack_install_ad : word -> option byte :=
 Example sigaltstack_install_replaces_inherited_autodisarm :
   check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_ok
                    (fun _ => None))
-    (mkEffect 0 [] []) (sig_oldstack_model true) =
+    (sigaltstack_read_effect 0) (sig_oldstack_model true) =
   CheckOk (with_sigaltstack_installed
              (with_sigaltstack_autodisarm false (sig_oldstack_model true))) [] /\
   check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0]
                    mem_sigaltstack_install_ad (fun _ => None))
-    (mkEffect 0 [] []) (sig_oldstack_model false) =
+    (sigaltstack_read_effect 0) (sig_oldstack_model false) =
   CheckOk (with_sigaltstack_installed
              (with_sigaltstack_autodisarm true (sig_oldstack_model false))) [].
 Proof. split; check_eq. Qed.
@@ -1110,7 +1166,29 @@ Example sigaltstack_oldstack_both_inherited_bits :
                    (fun _ => None) wmem_oldstack)
     (mkEffect 0 [(8192, sig_oldstack_bytes true)] [])
     (sig_oldstack_model true) = CheckOk (sig_oldstack_model true) [].
-Proof. repeat split; vm_compute; reflexivity. Qed.
+Proof.
+  assert (Hquery : forall bit m,
+    m_sigaltstack_installed m = false ->
+    m_sigaltstack_autodisarm m = bit ->
+    check_sigaltstack
+      (mkInput 132 [0; 8192; 0; 0; 0; 0] (fun _ => None) wmem_oldstack)
+      0 8192 (mkEffect 0 [(8192, sig_oldstack_bytes bit)] []) m = CheckOk m []).
+  { intros bit m Hi Hb. destruct bit; unfold check_sigaltstack;
+      rewrite Hi, Hb; vm_compute; reflexivity. }
+  split; [reflexivity|].
+  split; [reflexivity|].
+  split.
+  - change (check_sigaltstack
+      (mkInput 132 [0; 8192; 0; 0; 0; 0] (fun _ => None) wmem_oldstack)
+      0 8192 (mkEffect 0 [(8192, sig_oldstack_bytes false)] [])
+      (sig_oldstack_model false) = CheckOk (sig_oldstack_model false) []).
+    apply Hquery; reflexivity.
+  - change (check_sigaltstack
+      (mkInput 132 [0; 8192; 0; 0; 0; 0] (fun _ => None) wmem_oldstack)
+      0 8192 (mkEffect 0 [(8192, sig_oldstack_bytes true)] [])
+      (sig_oldstack_model true) = CheckOk (sig_oldstack_model true) []).
+    apply Hquery; reflexivity.
+Qed.
 
 Example sigaltstack_oldstack_wrong_bit_rejected :
   check_syscall (mkInput 132 [0; 8192; 0; 0; 0; 0]
@@ -1151,11 +1229,11 @@ Definition mem_sigaltstack_disable_ad : word -> option byte :=
 Example sigaltstack_disable_stores_caller_autodisarm_bit :
   check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0]
                    mem_sigaltstack_disable_ad (fun _ => None))
-    (mkEffect 0 [] []) (sig_oldstack_model false)
+    (sigaltstack_read_effect 0) (sig_oldstack_model false)
     = CheckOk (with_sigaltstack_autodisarm true (sig_oldstack_model false)) [] /\
   check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0]
                    mem_sigaltstack_disable (fun _ => None))
-    (mkEffect 0 [] []) (sig_oldstack_model true)
+    (sigaltstack_read_effect 0) (sig_oldstack_model true)
     = CheckOk (with_sigaltstack_autodisarm false (sig_oldstack_model true)) [].
 Proof. split; vm_compute; reflexivity. Qed.
 

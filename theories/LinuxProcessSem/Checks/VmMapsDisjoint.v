@@ -2278,6 +2278,7 @@ Proof.
   { apply check_ret_only_ok_iff in H as (_ & -> & _). reflexivity. }
   destruct (sigaltstack_at (in_mem i) uss) as [bs|].
   2:{ apply check_ret_only_ok_iff in H as (_ & -> & _). reflexivity. }
+  apply check_copyins_after_ok_iff in H as [_ H].
   destruct (negb (ss_mode_ok (ss_flags_of bs))).
   { apply check_ret_only_ok_iff in H as (_ & -> & _). reflexivity. }
   destruct (ss_disabling (ss_flags_of bs)).

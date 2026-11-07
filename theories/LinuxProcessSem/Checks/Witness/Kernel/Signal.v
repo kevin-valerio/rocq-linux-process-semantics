@@ -59,19 +59,20 @@ Definition sigaltstack_witness (uss uoss : word) (i : SyscallInput)
     match sigaltstack_at (in_mem i) uss with
     | None => ret_outcome (errno_ret EFAULT) m
     | Some bs =>
-        if negb (ss_mode_ok (ss_flags_of bs))
-        then ret_outcome (errno_ret EINVAL) m
-        else if ss_disabling (ss_flags_of bs)
-        then ret_outcome (Z_to_bv 64 0)
-               (with_sigaltstack_autodisarm (ss_autodisarm_set (ss_flags_of bs)) m)
-        else if (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool
-        then Unmodeled
-        else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
-        then ret_outcome (errno_ret ENOMEM) m
-        else ret_outcome (Z_to_bv 64 0)
-               (with_sigaltstack_installed
-                  (with_sigaltstack_autodisarm
-                     (ss_autodisarm_set (ss_flags_of bs)) m))
+        outcome_copyins [(uss, Z.to_nat SIGALTSTACK_BYTES)]
+          (if negb (ss_mode_ok (ss_flags_of bs))
+           then ret_outcome (errno_ret EINVAL) m
+           else if ss_disabling (ss_flags_of bs)
+           then ret_outcome (Z_to_bv 64 0)
+                  (with_sigaltstack_autodisarm (ss_autodisarm_set (ss_flags_of bs)) m)
+           else if (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool
+           then Unmodeled
+           else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
+           then ret_outcome (errno_ret ENOMEM) m
+           else ret_outcome (Z_to_bv 64 0)
+                  (with_sigaltstack_installed
+                     (with_sigaltstack_autodisarm
+                        (ss_autodisarm_set (ss_flags_of bs)) m)))
     end.
 
 Lemma sigaltstack_witness_ok : forall uss uoss i m,
@@ -90,6 +91,7 @@ Proof.
   eapply bind_step; [apply input_ok|]. cbv beta.
   destruct (sigaltstack_at (in_mem i) uss) as [bs|] eqn:Hbs; cbv beta iota.
   2:{ unfold err_ret, ret_only, ret_outcome. apply pure_ok. }
+  apply record_copyins_outcome.
   destruct (negb (ss_mode_ok (ss_flags_of bs))) eqn:Hmode; cbv beta iota.
   { unfold err_ret, ret_only, ret_outcome. apply pure_ok. }
   destruct (ss_disabling (ss_flags_of bs)) eqn:Hdis; cbv beta iota.

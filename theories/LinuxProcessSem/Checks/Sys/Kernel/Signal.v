@@ -141,19 +141,20 @@ Definition check_sigaltstack (i : SyscallInput) (uss uoss : word)
     match sigaltstack_at (in_mem i) uss with
     | None => check_ret_only eff (errno_ret EFAULT) m []
     | Some bs =>
-        if negb (ss_mode_ok (ss_flags_of bs))
-        then check_ret_only eff (errno_ret EINVAL) m []
-        else if ss_disabling (ss_flags_of bs)
-        then check_ret_only eff (Z_to_bv 64 0)
-               (with_sigaltstack_autodisarm (ss_autodisarm_set (ss_flags_of bs)) m) []
-        else if (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool
-        then CheckUnmodeled
-        else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
-        then check_ret_only eff (errno_ret ENOMEM) m []
-        else check_ret_only eff (Z_to_bv 64 0)
-               (with_sigaltstack_installed
-                  (with_sigaltstack_autodisarm
-                     (ss_autodisarm_set (ss_flags_of bs)) m)) []
+        check_copyins_after [(uss, Z.to_nat SIGALTSTACK_BYTES)] eff
+          (if negb (ss_mode_ok (ss_flags_of bs))
+           then check_ret_only (clear_copyins eff) (errno_ret EINVAL) m []
+           else if ss_disabling (ss_flags_of bs)
+           then check_ret_only (clear_copyins eff) (Z_to_bv 64 0)
+                  (with_sigaltstack_autodisarm (ss_autodisarm_set (ss_flags_of bs)) m) []
+           else if (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool
+           then CheckUnmodeled
+           else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
+           then check_ret_only (clear_copyins eff) (errno_ret ENOMEM) m []
+           else check_ret_only (clear_copyins eff) (Z_to_bv 64 0)
+                  (with_sigaltstack_installed
+                     (with_sigaltstack_autodisarm
+                        (ss_autodisarm_set (ss_flags_of bs)) m)) [])
     end.
 
 Lemma check_sigaltstack_sound_ok : forall i uss uoss eff m m' evs,
@@ -175,6 +176,8 @@ Proof.
   destruct (sigaltstack_at (in_mem i) uss) as [bs|] eqn:Hbs; cbv beta iota.
   2:{ apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
       apply pure_ok. }
+  apply check_copyins_after_ok_iff in H as [Hreads H].
+  eapply record_copyins_clear_ok; [exact Hreads|].
   destruct (negb (ss_mode_ok (ss_flags_of bs))) eqn:Hmode; cbv beta iota.
   { apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
     apply pure_ok. }
@@ -210,6 +213,8 @@ Proof.
   eapply bind_unmodeled2; [apply input_ok|]. cbv beta.
   destruct (sigaltstack_at (in_mem i) uss) as [bs|] eqn:Hbs; cbv beta iota.
   2:{ now apply check_ret_only_no_unmodeled in H. }
+  apply check_copyins_after_unmodeled in H.
+  apply record_copyins_unmodeled.
   destruct (negb (ss_mode_ok (ss_flags_of bs))) eqn:Hmode; cbv beta iota.
   { now apply check_ret_only_no_unmodeled in H. }
   destruct (ss_disabling (ss_flags_of bs)) eqn:Hdis; cbv beta iota.
@@ -226,28 +231,38 @@ Lemma check_sigaltstack_complete_ok : forall i uss uoss eff m m' evs,
   check_sigaltstack i uss uoss eff m = CheckOk m' evs.
 Proof.
   intros i uss uoss eff m m' evs H.
-  unfold sigaltstack_spec in H. unfold check_sigaltstack. sys_unfold.
-  inv_ok.
-  destruct (m_sigaltstack_installed m) eqn:Hw; cbv beta iota in *; [inv_ok|].
+  unfold sigaltstack_spec in H. unfold check_sigaltstack.
+  apply get_model_bind_ok_inv in H.
+  destruct (m_sigaltstack_installed m) eqn:Hw; cbv beta iota in *;
+    [unfold unmodeled in H; discriminate|].
   destruct (negb (w_is0 uoss)) eqn:Ho; cbv beta iota in *.
   { destruct (negb (w_is0 uss)) eqn:Hu; cbv beta iota in *;
-      [inv_ok|].
+      [unfold unmodeled in H; discriminate|].
     eapply check_ss_oldstack_complete_ok; eassumption. }
   destruct (w_is0 uss) eqn:Hu; cbv beta iota in *.
-  { inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
-  inv_ok.
+  { sys_unfold. inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
+  apply input_bind_ok_inv in H.
   destruct (sigaltstack_at (in_mem i) uss) as [bs|] eqn:Hbs;
     cbv beta iota in *.
-  2:{ inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
+  2:{ sys_unfold. inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
+  apply record_copyins_ok_inv in H as [core [H Heff]].
+  subst eff.
+  sys_unfold.
   destruct (negb (ss_mode_ok (ss_flags_of bs))) eqn:Hmode;
     cbv beta iota in *.
-  { inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
+  { inv_ok. apply check_copyins_after_ok_iff. split; [reflexivity|].
+    cbn. rewrite bv_eqb_refl. reflexivity. }
   destruct (ss_disabling (ss_flags_of bs)) eqn:Hdis; cbv beta iota in *.
-  { inv_ok. cbn. rewrite bv_eqb_refl. reflexivity. }
+  { inv_ok. apply check_copyins_after_ok_iff. split; [reflexivity|].
+    cbn. rewrite bv_eqb_refl. reflexivity. }
   destruct (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool eqn:Hzero;
     cbv beta iota in *; [inv_ok|].
   destruct (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z eqn:Hsz;
-    cbv beta iota in *; inv_ok; cbn; rewrite bv_eqb_refl; reflexivity.
+    cbv beta iota in *.
+  { inv_ok. apply check_copyins_after_ok_iff. split; [reflexivity|].
+    cbn. rewrite bv_eqb_refl. reflexivity. }
+  inv_ok. apply check_copyins_after_ok_iff. split; [reflexivity|].
+  cbn. rewrite bv_eqb_refl. reflexivity.
 Qed.
 
 Lemma check_sigaltstack_complete_unmodeled : forall i uss uoss m eff,

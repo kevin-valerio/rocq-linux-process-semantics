@@ -1299,8 +1299,8 @@ Definition ss_oldstack_spec (uoss : word) (autodisarm : bool)
          only arm that raises [sas_ss_size] above zero, and the
          [Uapi.MINSIGSTKSZ] bound arm 8 just applied is why.
 
-    The old-stack query writes 24 bytes.  Copy-in of [uss] is read into
-    a kernel local and is not recorded in the effect. *)
+    The old-stack query writes 24 bytes.  A successful copy-in of [uss]
+    records all 24 bytes, including paths that later return an errno. *)
 Definition sigaltstack_spec (uss uoss : word) : Sys SyscallEffect :=
   m <- get_model ;;
   if m_sigaltstack_installed m then unmodeled
@@ -1313,17 +1313,18 @@ Definition sigaltstack_spec (uss uoss : word) : Sys SyscallEffect :=
     match sigaltstack_at (in_mem i) uss with
     | None => err_ret EFAULT
     | Some bs =>
-        let fl := ss_flags_of bs in
-        if negb (ss_mode_ok fl) then err_ret EINVAL
-        else if ss_disabling fl
-        then modify (with_sigaltstack_autodisarm (ss_autodisarm_set fl)) ;;
-             ret_only (Z_to_bv 64 0)
-        else if (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool
-        then unmodeled
-        else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
-        then err_ret ENOMEM
-        else modify (with_sigaltstack_autodisarm (ss_autodisarm_set fl)) ;;
-             set_sigaltstack_installed ;; ret_only (Z_to_bv 64 0)
+        record_copyins [(uss, Z.to_nat SIGALTSTACK_BYTES)]
+          (let fl := ss_flags_of bs in
+           if negb (ss_mode_ok fl) then err_ret EINVAL
+           else if ss_disabling fl
+           then modify (with_sigaltstack_autodisarm (ss_autodisarm_set fl)) ;;
+                ret_only (Z_to_bv 64 0)
+           else if (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool
+           then unmodeled
+           else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
+           then err_ret ENOMEM
+           else modify (with_sigaltstack_autodisarm (ss_autodisarm_set fl)) ;;
+                set_sigaltstack_installed ;; ret_only (Z_to_bv 64 0))
     end.
 
 (* =========================================================================
