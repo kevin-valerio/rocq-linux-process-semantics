@@ -73,9 +73,9 @@ Definition O_LARGEFILE : Z := 32768%Z.
 
     - READ THE FLAG WORD BACK, which means fcntl(F_GETFL).  fcntl (25)
       is modeled and F_GETFL IS one of the commands it answers — but
-      only on the fd kind whose flag word the model can derive, which is
-      [State.FdSocket] ([Fcntl.getfl_f_flags]).  [Open.openat_spec] never
-      mints one: the fd this bullet is about is an [FdFile], [FdFileW],
+      on [State.FdSocket] and on inherited [State.FdChannel] descriptors
+      ([Fcntl.getfl_f_flags]). [Open.openat_spec] never mints either:
+      the fd this bullet is about is an [FdFile], [FdFileW],
       [FdFileA], [FdFileRW], [FdDir], [FdDevNull] or [FdUrandom], and F_GETFL
       declines on every one of them FOR THE
       REASON THIS BULLET IS ABOUT — the ignored bit is part of the answer, so the

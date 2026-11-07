@@ -1476,9 +1476,9 @@ Definition shutdown_spec (fd how : word) : Sys SyscallEffect :=
      never allocates one, so [kill_fasync_rcu] takes its
      [if (!fown) goto next] and [send_sigio] -- whose own guard is
      [if (!pid) goto out_unlock_fown] -- is never entered.
-     [Fs.Fcntl.fcntl_spec] models EXACTLY THREE COMMANDS -- [F_SETFD],
-     the provably empty [F_SETFL] above, and an [F_GETFL] restricted to
-     the fd kinds [Fs.Fcntl.getfl_f_flags] can derive a flag word for --
+     [Fs.Fcntl.fcntl_spec] models FOUR COMMANDS -- [F_SETFD],
+     the provably empty [F_SETFL] above, [F_GETFL] where
+     [Fs.Fcntl.getfl_f_flags] supplies a word, and [F_GETFD] on channels --
      and answers [unmodeled] for every other one; none of those ioctls
      is in [Fs.Ioctl.tty_only_request].
    - NO HANDLER CAN BE INSTALLED FOR EITHER SIGNAL, which is a third gate

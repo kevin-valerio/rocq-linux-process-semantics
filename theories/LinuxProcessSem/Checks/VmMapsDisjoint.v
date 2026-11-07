@@ -1979,11 +1979,16 @@ Qed.
     — so [m_vmmaps] comes across by conversion and each proof is the
     same mechanical [vm_frame2]. *)
 
+Lemma dup_channel_model_vm_frame : forall fd e bit m,
+  m_vmmaps (dup_channel_model fd e bit m) = m_vmmaps m.
+Proof. intros fd e bit m. destruct e; reflexivity. Qed.
+
 Lemma check_dup_frame : forall oldfd eff m m' evs,
   check_dup oldfd eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
   intros oldfd eff m m' evs H.
   unfold check_dup, check_dup_result in H. vm_frame2 H.
+  apply dup_channel_model_vm_frame.
 Qed.
 
 Lemma check_dup3_frame : forall oldfd newfd flags eff m m' evs,
@@ -1991,6 +1996,7 @@ Lemma check_dup3_frame : forall oldfd newfd flags eff m m' evs,
   m_vmmaps m' = m_vmmaps m.
 Proof.
   intros oldfd newfd flags eff m m' evs H. unfold check_dup3 in H. vm_frame2 H.
+  all: apply dup_channel_model_vm_frame.
 Qed.
 
 Lemma check_unlinkat_frame : forall i dirfd pathp flags eff m m' evs,
@@ -2198,6 +2204,7 @@ Lemma check_fcntl_frame : forall fd cmd arg eff m m' evs,
   check_fcntl fd cmd arg eff m = CheckOk m' evs -> m_vmmaps m' = m_vmmaps m.
 Proof.
   intros fd cmd arg eff m m' evs H. unfold check_fcntl in H. vm_frame2 H.
+  destruct f; reflexivity.
 Qed.
 
 (** sched_setscheduler answers an errno or a 0 that changes no model
