@@ -1077,6 +1077,22 @@ Definition sig_oldstack_input (bit : bool) : ProcInput :=
 Definition sig_oldstack_model (bit : bool) : Model :=
   init_model [] 0 0 demo_sp demo_limit (sig_oldstack_input bit).
 
+Definition mem_sigaltstack_install_ad : word -> option byte :=
+  fun a => if bv_eqb a 4107 then Some 128 else mem_sigaltstack_ok a.
+
+Example sigaltstack_install_replaces_inherited_autodisarm :
+  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_ok
+                   (fun _ => None))
+    (mkEffect 0 [] []) (sig_oldstack_model true) =
+  CheckOk (with_sigaltstack_installed
+             (with_sigaltstack_autodisarm false (sig_oldstack_model true))) [] /\
+  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0]
+                   mem_sigaltstack_install_ad (fun _ => None))
+    (mkEffect 0 [] []) (sig_oldstack_model false) =
+  CheckOk (with_sigaltstack_installed
+             (with_sigaltstack_autodisarm true (sig_oldstack_model false))) [].
+Proof. split; check_eq. Qed.
+
 Definition wmem_oldstack : word -> option byte :=
   fun a => if bv_leu 8192 a && bv_ltu a (8192 + 24) then Some 0 else None.
 

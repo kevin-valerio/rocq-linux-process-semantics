@@ -68,7 +68,10 @@ Definition sigaltstack_witness (uss uoss : word) (i : SyscallInput)
         then Unmodeled
         else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
         then ret_outcome (errno_ret ENOMEM) m
-        else ret_outcome (Z_to_bv 64 0) (with_sigaltstack_installed m)
+        else ret_outcome (Z_to_bv 64 0)
+               (with_sigaltstack_installed
+                  (with_sigaltstack_autodisarm
+                     (ss_autodisarm_set (ss_flags_of bs)) m))
     end.
 
 Lemma sigaltstack_witness_ok : forall uss uoss i m,
@@ -99,6 +102,7 @@ Proof.
     cbv beta iota.
   { unfold err_ret, ret_only, ret_outcome. apply pure_ok. }
   unfold ret_outcome. eapply bind_step; [apply modify_ok|].
+  eapply bind_step; [apply modify_ok|].
   unfold ret_only. apply pure_ok.
 Qed.
 

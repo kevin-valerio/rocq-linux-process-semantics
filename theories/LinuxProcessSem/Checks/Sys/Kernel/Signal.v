@@ -150,7 +150,10 @@ Definition check_sigaltstack (i : SyscallInput) (uss uoss : word)
         then CheckUnmodeled
         else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
         then check_ret_only eff (errno_ret ENOMEM) m []
-        else check_ret_only eff (Z_to_bv 64 0) (with_sigaltstack_installed m) []
+        else check_ret_only eff (Z_to_bv 64 0)
+               (with_sigaltstack_installed
+                  (with_sigaltstack_autodisarm
+                     (ss_autodisarm_set (ss_flags_of bs)) m)) []
     end.
 
 Lemma check_sigaltstack_sound_ok : forall i uss uoss eff m m' evs,
@@ -185,6 +188,7 @@ Proof.
   { apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
     apply pure_ok. }
   apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
+  eapply bind_ok0; [apply modify_ok|].
   eapply bind_ok0; [apply modify_ok|]. apply pure_ok.
 Qed.
 
