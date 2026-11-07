@@ -156,6 +156,19 @@ Definition dup_modeled_entry (e : FdEntry) : bool :=
   | FdHpagePmdSize _ => false
   end.
 
+(** A duplicate shares the channel status flags but gets its own
+    close-on-exec bit. *)
+Definition dup_channel_model (fd : word) (e : FdEntry) (cloexec : bool)
+    (m : Model) : Model :=
+  let m' := with_fds (fd_insert (m_fds m) fd e) m in
+  match e with
+  | FdChannel _ => with_channel_cloexec fd cloexec m'
+  | _ => m'
+  end.
+
+Definition dup3_cloexec (flags : word) : bool :=
+  negb (Z.eqb (Z.land (bv_unsigned (flag32 flags)) O_CLOEXEC) 0).
+
 (** dup's injectable failures: fd-table exhaustion at RLIMIT_NOFILE
     (EMFILE, which also keeps the spec receptive when no free fd
     exists) and a descriptor table the kernel cannot grow (ENOMEM, from
@@ -192,7 +205,7 @@ Definition dup_spec (oldfd : word) : Sys SyscallEffect :=
       else
         alt (er <- errno_from dup_errnos ;; err_ret er)  (* untracked env failure or no free fd *)
             (fd <- lowest_fd (m_fds m) ;;
-             set_fds (fd_insert (m_fds m) fd e) ;;
+             modify (dup_channel_model fd e false) ;;
              ret_only fd)
   end.
 
@@ -282,15 +295,9 @@ Definition dup3_flags_ok (flags : word) : bool :=
     below the table's [max_fds], so [expand_files] returns 0 for it
     too.
 
-    O_CLOEXEC is accepted and IGNORED, as [Open.openat_spec] accepts and
-    ignores it: close-on-exec is observable only through execve (221)
-    and fcntl (25).  execve is outside [Specs.modeled_sysnos].  fcntl is
-    IN it, but the bit's only reader there is [F_GETFD], which
-    [Fcntl.fcntl_spec] declines; the one fcntl command it does answer
-    for the bit, [F_SETFD], writes it and reports nothing.  So no
-    modeled execution can tell the bit's value, and the decision to
-    ignore O_CLOEXEC here stands or falls with [Fcntl.fcntl_spec]'s
-    decision to decline [F_GETFD].  The displaced entry is dropped
+    O_CLOEXEC sets the new descriptor's close-on-exec bit for a
+    channel, where [Fcntl.fcntl_spec] can read it with F_GETFD.
+    Other kinds still decline F_GETFD. The displaced entry is dropped
     exactly as [Open.close_spec] drops one. *)
 Definition dup3_newfd_under_limit (newfd : word) (m : Model) : bool :=
   Z.ltb (bv_unsigned newfd) (bv_unsigned (m_nofile m)).
@@ -310,9 +317,11 @@ Definition dup3_spec (oldfd newfd flags : word) : Sys SyscallEffect :=
           | None =>
               (* free: answered only below the embedded table's floor *)
               if Z.ltb (bv_unsigned newfd) NR_OPEN_DEFAULT
-              then set_fds (fd_insert (m_fds m) newfd e) ;; ret_only newfd
+              then modify (dup_channel_model newfd e (dup3_cloexec flags)) ;;
+                   ret_only newfd
               else unmodeled
-          | Some _ => set_fds (fd_insert (m_fds m) newfd e) ;; ret_only newfd
+          | Some _ => modify (dup_channel_model newfd e (dup3_cloexec flags)) ;;
+                      ret_only newfd
           end
     end.
 

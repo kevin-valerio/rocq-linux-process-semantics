@@ -1072,7 +1072,7 @@ Proof. split; vm_compute; reflexivity. Qed.
 Definition sig_oldstack_input (bit : bool) : ProcInput :=
   mkProcInput_full [] [] [] IEof demo_uid demo_gid demo_groups net_silent
     default_nofile (Z_to_bv 64 0) demo_hwcap false Sv48 default_urandom
-    [] None None bit.
+    [] None None bit default_stdio_status.
 
 Definition sig_oldstack_model (bit : bool) : Model :=
   init_model [] 0 0 demo_sp demo_limit (sig_oldstack_input bit).

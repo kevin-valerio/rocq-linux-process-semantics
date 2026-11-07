@@ -2945,6 +2945,8 @@ Definition vm_live_bytes (h : VmMaps) : Z := live_bytes (vm_maps h).
 Record FdState := mkFdState {
   fdst_table : list (word * FdEntry);
   fdst_pipes : list (word * PipeBuf);
+  fdst_stdio_status : word * word * word;
+  fdst_channel_cloexec : list (word * bool);
 }.
 
 (** The virtual-memory subsystem.  [vmst_lazy] records page-aligned sparse
@@ -3511,6 +3513,10 @@ Record Model := mkModelOf {
     nesting. *)
 Definition m_fds (m : Model) : list (word * FdEntry) := fdst_table (m_fd m).
 Definition m_pipes (m : Model) : list (word * PipeBuf) := fdst_pipes (m_fd m).
+Definition m_stdio_status (m : Model) : word * word * word :=
+  fdst_stdio_status (m_fd m).
+Definition m_channel_cloexec (m : Model) : list (word * bool) :=
+  fdst_channel_cloexec (m_fd m).
 Definition m_vmmaps (m : Model) : VmMaps := vmst_maps (m_vm m).
 Definition m_vm_lazy (m : Model) : list (word * word) := vmst_lazy (m_vm m).
 Definition m_vm_materialized (m : Model) : list word :=
@@ -3587,6 +3593,11 @@ Definition overflow_id : word := Z_to_bv 64 65534.
     never sees this: [init_model] installs [in_nofile] over it. *)
 Definition default_nofile : word := Z_to_bv 64 1024.
 
+(** Blocking pipe descriptors inherited by the comparison ELF.  The
+    O_LARGEFILE bit is present in the pinned QEMU run. *)
+Definition default_stdio_status : word * word * word :=
+  (Z_to_bv 64 32768, Z_to_bv 64 32769, Z_to_bv 64 32769).
+
 (** [mkModel] keeps the flat constructor's argument order, so every site that
     builds a model is unchanged.  The random device's stream starts
     EMPTY here ([IEof]) for the reason the accept queue starts silent:
@@ -3595,7 +3606,7 @@ Definition default_nofile : word := Z_to_bv 64 1024.
 Definition mkModel (fds : list (word * FdEntry)) (vm : VmMaps)
     (stdin : InputStream) (fs : Fs.Fs) (halted : option word)
     (tid : option word) (rlim : option (list byte)) : Model :=
-  mkModelOf (mkFdState fds []) (mkVmState vm [] [])
+  mkModelOf (mkFdState fds [] default_stdio_status []) (mkVmState vm [] [])
             (mkIoState stdin IEof net_silent (Z_to_bv 64 0)) (mkFsState fs None)
             (mkProcState halted tid
                (mkCreds overflow_id overflow_id overflow_id
@@ -3608,11 +3619,23 @@ Definition mkModel (fds : list (word * FdEntry)) (vm : VmMaps)
     carries the other five across, so a new field inside a subsystem touches
     that subsystem's setters and no others. *)
 Definition with_fds (fds : list (word * FdEntry)) (m : Model) : Model :=
-  mkModelOf (mkFdState fds (m_pipes m)) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
+  mkModelOf (mkFdState fds (m_pipes m) (m_stdio_status m)
+              (m_channel_cloexec m)) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
     (m_lim m) (m_time m).
 Definition with_pipes (ps : list (word * PipeBuf)) (m : Model) : Model :=
-  mkModelOf (mkFdState (m_fds m) ps) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
+  mkModelOf (mkFdState (m_fds m) ps (m_stdio_status m)
+              (m_channel_cloexec m)) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
     (m_lim m) (m_time m).
+Definition with_stdio_status (flags : word * word * word) (m : Model) : Model :=
+  mkModelOf (mkFdState (m_fds m) (m_pipes m) flags
+              (m_channel_cloexec m)) (m_vm m) (m_io m) (m_fsys m) (m_proc m)
+    (m_lim m) (m_time m).
+Definition with_channel_cloexec (fd : word) (bit : bool) (m : Model) : Model :=
+  let old := m_channel_cloexec m in
+  let updated := (fd, bit) ::
+    List.filter (fun p => negb (bv_eqb (fst p) fd)) old in
+  mkModelOf (mkFdState (m_fds m) (m_pipes m) (m_stdio_status m) updated)
+    (m_vm m) (m_io m) (m_fsys m) (m_proc m) (m_lim m) (m_time m).
 Definition with_vmmaps (h : VmMaps) (m : Model) : Model :=
   mkModelOf (m_fd m)
     (mkVmState h (m_vm_lazy m) (m_vm_materialized m))
@@ -4029,7 +4052,8 @@ Definition with_clock (t : word) (m : Model) : Model :=
     three, because the three moves are one event — [accept] is the only
     thing that changes any of them, and it always changes all three. *)
 Definition with_accepted (fds : list (word * FdEntry)) (m : Model) : Model :=
-  mkModelOf (mkFdState fds (m_pipes m)) (m_vm m)
+  mkModelOf (mkFdState fds (m_pipes m) (m_stdio_status m)
+              (m_channel_cloexec m)) (m_vm m)
     (mkIoState (m_stdin m) (m_urandom m) (nq_rest (m_net m))
                (m_conn_ix m + Z_to_bv 64 1))
     (m_fsys m) (m_proc m) (m_lim m) (m_time m).
@@ -4065,6 +4089,20 @@ Fixpoint fd_lookup (fds : list (word * FdEntry)) (fd : word)
   match fds with
   | [] => None
   | (k, e) :: r => if bv_eqb k fd then Some e else fd_lookup r fd
+  end.
+
+Definition stdio_status_for (m : Model) (ch : word) : option word :=
+  let '(input, output, error) := m_stdio_status m in
+  if bv_eqb ch (Z_to_bv 64 0) then Some input
+  else if bv_eqb ch (Z_to_bv 64 1) then Some output
+  else if bv_eqb ch (Z_to_bv 64 2) then Some error
+  else None.
+
+Fixpoint channel_cloexec_for (m : list (word * bool)) (fd : word) : bool :=
+  match m with
+  | [] => false
+  | (k, bit) :: rest =>
+      if bv_eqb k fd then bit else channel_cloexec_for rest fd
   end.
 
 Definition fd_insert (fds : list (word * FdEntry)) (fd : word) (e : FdEntry)
@@ -5421,17 +5459,21 @@ Record ProcInput := mkProcInput_full {
   in_sigaltstack_autodisarm : bool
     (* The inherited SS_AUTODISARM bit in sas_ss_flags after execve.
        Both values are valid process inputs. *)
+;
+  in_stdio_status : word * word * word
+    (* The inherited f_flags words for stdin, stdout, and stderr.
+       The comparison task declares blocking pipe values. *)
 }.
 
-(** THE POSITIONAL-LITERAL FORM: every field except the five ENVIRONMENT
+(** THE POSITIONAL-LITERAL FORM: every field except the six ENVIRONMENT
     fields at the end of the record ([in_urandom], [in_tmp], [in_proc_maps],
-    [in_hwprobe], [in_sigaltstack_autodisarm]).
+    [in_hwprobe], [in_sigaltstack_autodisarm], [in_stdio_status]).
 
     The record's own constructor is [mkProcInput_full] and takes every
     field.  This takes the first thirteen, in that order,
-    and fills the last five with THE DEFAULT RANDOM STREAM,
+    and fills the last six with THE DEFAULT RANDOM STREAM,
     THE EMPTY /tmp, NO MAPS SNAPSHOT, NO HARDWARE PROBE RESPONSE,
-    and an unset SS_AUTODISARM bit:
+    an unset SS_AUTODISARM bit, and blocking pipe status flags:
     [default_urandom] is zero bytes
     forever, and a private /tmp starts empty.  So a literal written through this
     name denotes an input in an environment
@@ -5460,7 +5502,8 @@ Definition mkProcInput
     (nofile sigmask hwcap : word) (abort_terminal : bool)
     (va_size : VaSize) : ProcInput :=
   mkProcInput_full argv envp image_fs stdin uid gid groups net
-    nofile sigmask hwcap abort_terminal va_size default_urandom [] None None false.
+    nofile sigmask hwcap abort_terminal va_size default_urandom [] None None false
+    default_stdio_status.
 
 (** THE FILE SYSTEM THE RUN STARTS WITH: the image, with the run's
     declared private /tmp seeded into it under absolute keys.
@@ -5524,7 +5567,8 @@ Definition in_fs (inp : ProcInput) : Fs.Fs :=
 
 Definition init_model (reserved : list (word * word)) (brk0 mbase sp : word)
     (lim : Z) (inp : ProcInput) : Model :=
-  with_proc_maps (in_proc_maps inp)
+  with_stdio_status (in_stdio_status inp)
+  (with_proc_maps (in_proc_maps inp)
   (with_hwprobe (in_hwprobe inp)
   (with_sigaltstack_autodisarm (in_sigaltstack_autodisarm inp)
   (with_abort_terminal (in_abort_terminal inp)
@@ -5544,7 +5588,7 @@ Definition init_model (reserved : list (word * word)) (brk0 mbase sp : word)
        (in_fs inp)
        None
        None
-       None))))))))).
+       None)))))))))).
 
 (** The base case of the nonemptiness invariant: a run starts with NO
     protected range at all.  Every reachable [vm_noaccess] is therefore
