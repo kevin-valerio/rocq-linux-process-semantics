@@ -48,6 +48,8 @@ Definition flock_witness (fd cmd : word) (m : Model) : outcome SyscallEffect :=
           | FdPipe _ _  => Unmodeled
           | FdDevNull _ _ => Unmodeled
           | FdUrandom => Unmodeled
+          | FdProcMaps _ => Unmodeled
+          | FdHpagePmdSize _ => Unmodeled
           end
     end.
 
@@ -65,7 +67,7 @@ Proof.
   destruct (flock_unlock_b cmd) eqn:Hun.
   { eapply bind_step; [apply get_model_ok|]. cbv beta iota.
     srw Hfd. apply pure_ok. }
-  destruct e as [c|p off|p off|p off|p off| |sk|id w|rd wr| ].
+  destruct e as [c|p off|p off|p off|p off| |sk|id w|rd wr| |maps_off|hpage_off].
   - eapply bind_step; [apply get_model_ok|]. cbv beta iota.
     srw Hfd. apply unmodeled_intro.
   - destruct (flock_sole_opener (m_fds m) p) eqn:Hsole;
@@ -90,6 +92,12 @@ Proof.
     eapply bind_step; [apply get_model_ok|]. cbv beta iota.
     srw Hfd. apply unmodeled_intro.
   - (* /dev/urandom: declined *)
+    eapply bind_step; [apply get_model_ok|]. cbv beta iota.
+    srw Hfd. apply unmodeled_intro.
+  - (* /proc/self/maps: declined *)
+    eapply bind_step; [apply get_model_ok|]. cbv beta iota.
+    srw Hfd. apply unmodeled_intro.
+  - (* sysfs attribute: declined *)
     eapply bind_step; [apply get_model_ok|]. cbv beta iota.
     srw Hfd. apply unmodeled_intro.
 Qed.

@@ -231,9 +231,10 @@ Definition probe_mem : word -> option byte :=
       and is [unmodeled] otherwise, and [mremap_spec] models only
       MREMAP_MAYMOVE.
     - prlimit64 (261) declines the default PID: [Specs.prlimit64_spec]
-      answers only for pid 0 (no other task exists), only for
-      RLIMIT_CORE, and only when exactly one of the two rlimit pointers
-      is NULL — three gates the default registers fail at the first.
+      answers only for pid 0 (no other task exists), and the default
+      registers fail that gate first.
+    - riscv_hwprobe (258) declines the default pair count.  A nonzero
+      reserved flag reaches the kernel's -EINVAL gate before any pair read.
     - clock_gettime (113) declines the default CLOCKID: [a0] is a clock
       id here rather than an fd, and AT_FDCWD truncated to 32 bits is no
       modeled clock, so the arm declines before it reaches an answer.
@@ -306,6 +307,9 @@ Definition probe_args (n : Z) : list word :=
        rlimit pointers NULL -- new_rlim = 0 with old_rlim writable is
        the read path, and [probe_mem] makes a3 writable *)
     [z; Z_to_bv 64 RLIMIT_CORE; z; Z_to_bv 64 4096; z; z]
+  else if Z.eqb n 258 then
+    (* A reserved flag is rejected before the pair array is touched. *)
+    [AT_FDCWD; z; z; z; Z_to_bv 64 2; z]
   else if Z.eqb n 199 then
     (* socketpair gates on the FAMILY and has no descriptor to resolve
        first, so the default [AT_FDCWD] in a0 is read as a family no

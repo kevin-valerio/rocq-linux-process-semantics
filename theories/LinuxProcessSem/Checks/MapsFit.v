@@ -198,26 +198,32 @@ Proof.
       apply maps_subtract_fit. exact Hfit.
 Qed.
 
-Lemma check_mprotect_preserves_fit : forall addr len prot eff m m' evs,
-  check_mprotect addr len prot eff m = CheckOk m' evs ->
+Lemma check_mprotect_preserves_fit : forall addr len prot i eff m m' evs,
+  check_mprotect addr len prot i eff m = CheckOk m' evs ->
   vm_fit (m_vmmaps m) -> vm_fit (m_vmmaps m').
 Proof.
-  intros addr len prot [ret ws zs us cs ci] m m' evs H Hfit.
+  intros addr len prot i [ret ws zs us cs ci] m m' evs H Hfit.
   unfold check_mprotect in H. cbv zeta in H.
   dif H; [apply check_ret_only_model in H; subst m'; exact Hfit|].
   dif H; [apply check_ret_only_model in H; subst m'; exact Hfit|].
   dif H; [apply check_ret_only_model in H; subst m'; exact Hfit|].
   dif H; [apply check_ret_only_model in H; subst m'; exact Hfit|].
-  dif H; [discriminate|].
   dif H.
-  - destruct ws, us, cs, ci; try discriminate.
-    dif H.
-    + destruct zs; [|discriminate]. injection H as <- <-. exact Hfit.
-    + dif H; [|discriminate]. injection H as <- <-.
-      unfold vm_fit. rewrite vmm_mprotect_next. cbn [vm_maps]. exact Hfit.
   - dif H; [|discriminate].
-    destruct ws, zs, us, cs, ci; try discriminate.
-    dif H; [|discriminate]. injection H as <- <-. exact Hfit.
+    dif H; [|discriminate].
+    destruct ws, zs, us, ci; try discriminate.
+    dif H.
+    + destruct cs; [injection H as <- <-; exact Hfit|discriminate].
+    + dif H; [injection H as <- <-; exact Hfit|discriminate].
+  - dif H.
+    + destruct ws, us, cs, ci; try discriminate.
+      dif H.
+      * destruct zs; [|discriminate]. injection H as <- <-. exact Hfit.
+      * dif H; [|discriminate]. injection H as <- <-.
+        unfold vm_fit. rewrite vmm_mprotect_next. cbn [vm_maps]. exact Hfit.
+    + dif H; [|discriminate].
+      destruct ws, zs, us, cs, ci; try discriminate.
+      dif H; [|discriminate]. injection H as <- <-. exact Hfit.
 Qed.
 
 Lemma check_mmap_preserves_fit : forall addr len prot flags fd off eff m m' evs,
@@ -534,6 +540,7 @@ Proof.
     | erewrite check_fcntl_frame by eassumption; exact Hfit
     | erewrite check_sched_setscheduler_frame by eassumption; exact Hfit
     | erewrite check_sched_getaffinity_frame by eassumption; exact Hfit
+    | erewrite check_riscv_hwprobe_frame by eassumption; exact Hfit
     | erewrite check_sched_yield_frame by eassumption; exact Hfit
     | erewrite check_sigaltstack_frame by eassumption; exact Hfit
     | erewrite check_rt_sigaction_frame by eassumption; exact Hfit

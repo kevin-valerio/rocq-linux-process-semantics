@@ -1114,21 +1114,18 @@ Definition rt_sigprocmask_spec (how nset oset ss : word) : Sys SyscallEffect :=
     SO THE BIT IS SET BY ARM 9 AND NOT BY ARM 6.  [do_sigaltstack]
     reaches its three assignments on both, but the SS_DISABLE arm runs
     [ss_size = 0; ss_sp = NULL] first, so the record it leaves is
-    (NULL, 0, [ss_flags]) — the same zero-size shape execve's is, with
-    the same two constant readers.  Declining after it would give up an
-    answer the model still has.  What a disable does change is the third
-    field, from the inherited word to the caller's, and the spec buys
-    nothing by that: the two arms that would need a flags word (2 and 7)
-    decline whether it is known or not.
+    (NULL, 0, [ss_flags]) — the same zero-size shape execve's is.  The
+    caller's SS_AUTODISARM bit replaces the inherited bit, and later
+    old-stack queries report it.
 
     THE INVARIANT THE OTHER ARMS REST ON: while the bit is false the
-    record is (NULL, 0, F) for a flags word F the model does not track.
+    record is (NULL, 0, F) for a flags word F whose SS_AUTODISARM bit
+    the model tracks.
     It holds at [mkModel] (begin_new_exec), and each arm preserves it —
     2, 3, 4, 5, 7 and 8 store nothing at all, arm 6 stores
     (NULL, 0, [ss_flags]), and arm 9 breaks it and sets the bit in the
-    same step.  Every answer below is therefore correct for EVERY F,
-    which is what makes not tracking it sound rather than merely
-    convenient.
+    same step.  The full word is still needed for the no-change fast
+    path, so arm 7 declines it.
 
     THE STARTING RECORD IS execve's, AND IT IS NOT WHOLLY KNOWN.
     [begin_new_exec] (fs/exec.c) clears TWO of the three fields —
@@ -1138,21 +1135,10 @@ Definition rt_sigprocmask_spec (how nset oset ss : word) : Sys SyscallEffect :=
     (kernel/fork.c) for a CLONE_VM child and from nowhere on the exec
     path.  So the starting flags word is INHERITED from whatever process
     called [execve], which makes it a choice of the launching
-    environment in the way [State.in_sigmask] is, and
-    [State.ProcInput] does not quantify it.  Two things follow, and they
-    are the reason this spec has arms 2 and 7 rather than answering
-    everything the kernel answers:
-
-      - a non-NULL [uoss] is declined, because [do_sigaltstack] writes
-        [sas_ss_flags(sp) | (current->sas_ss_flags & SS_FLAG_BITS)]
-        there and the second half is the inherited bit.  This is
-        [rt_sigaction_spec]'s [oact] decline with a sharper citation:
-        there the unknown is a disposition execve only partly resets,
-        here it is a field execve does not reset at all.
-      - the no-change fast path is decided by comparing the caller's
-        whole [ss_flags] word against the stored one — that inherited
-        word, or whatever a previous SS_DISABLE put in its place — so a
-        call that would take it is declined too, see arm 7.
+    environment in the way [State.in_sigmask] is.  [State.ProcInput]
+    records its SS_AUTODISARM bit.  A disabled stack reports
+    [SS_DISABLE | SS_AUTODISARM] from that bit; the other flags remain
+    unknown, so the no-change fast path stays unmodeled in arm 7.
 
     THE SUCCESS ARM CARRIES A PREMISE ABOUT THE ISA, AND IT IS WORTH
     STATING BECAUSE -ENOMEM IS NOT [MINSIGSTKSZ] ALONE ON THIS
@@ -1230,6 +1216,21 @@ Definition ss_mode_ok (fl : word) : bool :=
   (Z.eqb md 0 || Z.eqb md SS_ONSTACK || Z.eqb md SS_DISABLE)%bool.
 
 Definition ss_disabling (fl : word) : bool := Z.eqb (ss_mode fl) SS_DISABLE.
+Definition ss_autodisarm_set (fl : word) : bool :=
+  negb (Z.eqb (Z.land (bv_unsigned fl) SS_AUTODISARM) 0).
+
+Definition ss_oldstack_flags_bytes (autodisarm : bool) : list byte :=
+  Z_to_le_bytes 4 (SS_DISABLE + if autodisarm then SS_AUTODISARM else 0).
+
+(** Linux zeroes the four padding bytes.  QEMU 8.2.2 copies an
+    uninitialized stack_t, so its padding may vary.  QEMU 8.2.2 also
+    omits SS_AUTODISARM from the reported flags; the true-bit case
+    follows Linux's do_sigaltstack instead. *)
+Definition ss_oldstack_shape (autodisarm : bool) (bs : list byte) : Prop :=
+  length bs = 24%nat /\
+  firstn 8 bs = repeat 0 8 /\
+  firstn 4 (skipn 8 bs) = ss_oldstack_flags_bytes autodisarm /\
+  skipn 16 bs = repeat 0 8.
 
 (** The [stack_t] at [uss], or [None] if any of its 24 bytes is
     unreadable.  All-or-nothing because [SYSCALL_DEFINE2(sigaltstack)]
@@ -1244,13 +1245,27 @@ Definition sigaltstack_at (mp : word -> option byte) (uss : word)
     : option (list byte) :=
   read_bytes_map mp uss (Z_to_bv 64 SIGALTSTACK_BYTES).
 
+Definition ss_oldstack_spec (uoss : word) (autodisarm : bool)
+    : Sys SyscallEffect :=
+  if negb (access_okb uoss SIGALTSTACK_BYTES) then err_ret EFAULT
+  else i <- input ;;
+    match read_bytes_map (in_wmem i) uoss (Z_to_bv 64 SIGALTSTACK_BYTES) with
+    | None => unmodeled
+    | Some _ =>
+        bs <- choose (ss_oldstack_shape autodisarm) ;;
+        pure (mkEffect (Z_to_bv 64 0) [(uoss, bs)] [])
+    end.
+
 (** [sigaltstack uss uoss].  The arms follow the kernel's own order:
 
       1. a stack is installed — [sas_ss_size] is non-zero — so nothing
          below can be decided from a stack pointer this model does not
          have: UNMODELED.  This is the arm that makes one bit enough.
-      2. a non-NULL [uoss] is UNMODELED — the inherited SS_AUTODISARM
-         bit is part of the answer.
+      2. a non-NULL [uoss] with NULL [uss] copies out the disabled
+         stack, using the inherited or last written SS_AUTODISARM bit.
+         An out-of-range pointer returns -EFAULT; a partly writable
+         destination is unmodeled because the kernel may write a prefix.
+         Both pointers non-NULL remain unmodeled.
       3. with both pointers NULL [do_sigaltstack] runs and does nothing:
          0.
       4. -EFAULT unless all 24 bytes at [uss] are readable.
@@ -1265,30 +1280,33 @@ Definition sigaltstack_at (mp : word -> option byte) (uss : word)
          exactly that and the fast path returned first, which is the same
          record, since that path is taken only when all three fields
          already match.  Either way the answer is 0 and the size stays
-         zero, so the bit is NOT set and the arms below keep answering.
+         zero, so the installed bit is NOT set and the arms below keep
+         answering.  The stored SS_AUTODISARM bit becomes the caller's.
       7. a zero [ss_sp] AND a zero [ss_size] under a non-disabling mode
          is UNMODELED, and this is the only arm that is not a kernel
          answer.  It is the fast path's shadow: the kernel returns 0 when
          all three fields equal the stored ones and -ENOMEM otherwise
          (the size is zero, so the bound below refuses it), and which of
          the two it is turns on the stored flags word — execve's
-         inherited one, or the one arm 6 wrote over it.  Neither is
-         tracked, so both decline.
+         inherited one, or the one arm 6 wrote over it.  The full word
+         is not tracked, so both decline.
       8. -ENOMEM below [Uapi.MINSIGSTKSZ].  The fast path cannot have
          fired above it: it needs [ss_sp] and [ss_size] to equal a
          stored pair that the invariant makes (NULL, 0), and that shape
          is arm 7's, already declined.
-      9. otherwise the install succeeds: 0, and the bit is set — this is
-         the only arm that raises [sas_ss_size] above zero, and the
+      9. otherwise the install succeeds: 0, the stack is installed, and
+         the stored SS_AUTODISARM bit becomes the caller's.  This is the
+         only arm that raises [sas_ss_size] above zero, and the
          [Uapi.MINSIGSTKSZ] bound arm 8 just applied is why.
 
-    No arm writes user memory, and none records a copy-in: the 24 bytes
-    are read into a kernel local ([stack_t new] on the syscall's own
-    stack), the same shape [rt_sigaction_spec] has above. *)
+    The old-stack query writes 24 bytes.  Copy-in of [uss] is read into
+    a kernel local and is not recorded in the effect. *)
 Definition sigaltstack_spec (uss uoss : word) : Sys SyscallEffect :=
   m <- get_model ;;
   if m_sigaltstack_installed m then unmodeled
-  else if negb (w_is0 uoss) then unmodeled
+  else if negb (w_is0 uoss) then
+    if negb (w_is0 uss) then unmodeled
+    else ss_oldstack_spec uoss (m_sigaltstack_autodisarm m)
   else if w_is0 uss then ret_only (Z_to_bv 64 0)
   else
     i <- input ;;
@@ -1298,12 +1316,14 @@ Definition sigaltstack_spec (uss uoss : word) : Sys SyscallEffect :=
         let fl := ss_flags_of bs in
         if negb (ss_mode_ok fl) then err_ret EINVAL
         else if ss_disabling fl
-        then ret_only (Z_to_bv 64 0)
+        then modify (with_sigaltstack_autodisarm (ss_autodisarm_set fl)) ;;
+             ret_only (Z_to_bv 64 0)
         else if (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool
         then unmodeled
         else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
         then err_ret ENOMEM
-        else set_sigaltstack_installed ;; ret_only (Z_to_bv 64 0)
+        else modify (with_sigaltstack_autodisarm (ss_autodisarm_set fl)) ;;
+             set_sigaltstack_installed ;; ret_only (Z_to_bv 64 0)
     end.
 
 (* =========================================================================

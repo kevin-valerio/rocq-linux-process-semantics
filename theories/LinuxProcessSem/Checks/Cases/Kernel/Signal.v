@@ -1069,6 +1069,96 @@ Example sigaltstack_after_a_disable_rejects_a_false_success :
      = CheckReject.
 Proof. split; vm_compute; reflexivity. Qed.
 
+Definition sig_oldstack_input (bit : bool) : ProcInput :=
+  mkProcInput_full [] [] [] IEof demo_uid demo_gid demo_groups net_silent
+    default_nofile (Z_to_bv 64 0) demo_hwcap false Sv48 default_urandom
+    [] None None bit.
+
+Definition sig_oldstack_model (bit : bool) : Model :=
+  init_model [] 0 0 demo_sp demo_limit (sig_oldstack_input bit).
+
+Definition mem_sigaltstack_install_ad : word -> option byte :=
+  fun a => if bv_eqb a 4107 then Some 128 else mem_sigaltstack_ok a.
+
+Example sigaltstack_install_replaces_inherited_autodisarm :
+  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0] mem_sigaltstack_ok
+                   (fun _ => None))
+    (mkEffect 0 [] []) (sig_oldstack_model true) =
+  CheckOk (with_sigaltstack_installed
+             (with_sigaltstack_autodisarm false (sig_oldstack_model true))) [] /\
+  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0]
+                   mem_sigaltstack_install_ad (fun _ => None))
+    (mkEffect 0 [] []) (sig_oldstack_model false) =
+  CheckOk (with_sigaltstack_installed
+             (with_sigaltstack_autodisarm true (sig_oldstack_model false))) [].
+Proof. split; check_eq. Qed.
+
+Definition wmem_oldstack : word -> option byte :=
+  fun a => if bv_leu 8192 a && bv_ltu a (8192 + 24) then Some 0 else None.
+
+Definition sig_oldstack_bytes (bit : bool) : list byte :=
+  repeat 0 8 ++ ss_oldstack_flags_bytes bit ++ [1; 2; 3; 4] ++ repeat 0 8.
+
+Example sigaltstack_oldstack_both_inherited_bits :
+  m_sigaltstack_autodisarm (sig_oldstack_model false) = false /\
+  m_sigaltstack_autodisarm (sig_oldstack_model true) = true /\
+  check_syscall (mkInput 132 [0; 8192; 0; 0; 0; 0]
+                   (fun _ => None) wmem_oldstack)
+    (mkEffect 0 [(8192, sig_oldstack_bytes false)] [])
+    (sig_oldstack_model false) = CheckOk (sig_oldstack_model false) [] /\
+  check_syscall (mkInput 132 [0; 8192; 0; 0; 0; 0]
+                   (fun _ => None) wmem_oldstack)
+    (mkEffect 0 [(8192, sig_oldstack_bytes true)] [])
+    (sig_oldstack_model true) = CheckOk (sig_oldstack_model true) [].
+Proof. repeat split; vm_compute; reflexivity. Qed.
+
+Example sigaltstack_oldstack_wrong_bit_rejected :
+  check_syscall (mkInput 132 [0; 8192; 0; 0; 0; 0]
+                   (fun _ => None) wmem_oldstack)
+    (mkEffect 0 [(8192, sig_oldstack_bytes false)] [])
+    (sig_oldstack_model true) = CheckReject.
+Proof. vm_compute. reflexivity. Qed.
+
+Example sigaltstack_oldstack_short_write_rejected :
+  check_syscall (mkInput 132 [0; 8192; 0; 0; 0; 0]
+                   (fun _ => None) wmem_oldstack)
+    (mkEffect 0 [(8192, firstn 23 (sig_oldstack_bytes false))] [])
+    (sig_oldstack_model false) = CheckReject.
+Proof. vm_compute. reflexivity. Qed.
+
+Example sigaltstack_oldstack_out_of_range_efault :
+  check_syscall (mkInput 132 [0; Z_to_bv 64 TASK_SIZE; 0; 0; 0; 0]
+                   (fun _ => None) (fun _ => None))
+    (mkEffect (errno_ret EFAULT) [] [])
+    (sig_oldstack_model false) = CheckOk (sig_oldstack_model false) [].
+Proof. vm_compute. reflexivity. Qed.
+
+Example sigaltstack_oldstack_short_destination_unmodeled :
+  check_syscall (mkInput 132 [0; 8192; 0; 0; 0; 0]
+                   (fun _ => None)
+                   (fun a => if bv_leu 8192 a && bv_ltu a (8192 + 12)
+                             then Some 0 else None))
+    (mkEffect (errno_ret EFAULT) [] [])
+    (sig_oldstack_model false) = CheckUnmodeled.
+Proof. vm_compute. reflexivity. Qed.
+
+Definition mem_sigaltstack_disable_ad : word -> option byte :=
+  fun a => if bv_leu 4096 a && bv_ltu a (4096 + 24)
+           then Some (if bv_eqb a 4104 then 2
+                      else if bv_eqb a 4107 then 128 else 0)
+           else None.
+
+Example sigaltstack_disable_stores_caller_autodisarm_bit :
+  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0]
+                   mem_sigaltstack_disable_ad (fun _ => None))
+    (mkEffect 0 [] []) (sig_oldstack_model false)
+    = CheckOk (with_sigaltstack_autodisarm true (sig_oldstack_model false)) [] /\
+  check_syscall (mkInput 132 [4096; 0; 0; 0; 0; 0]
+                   mem_sigaltstack_disable (fun _ => None))
+    (mkEffect 0 [] []) (sig_oldstack_model true)
+    = CheckOk (with_sigaltstack_autodisarm false (sig_oldstack_model true)) [].
+Proof. split; vm_compute; reflexivity. Qed.
+
 (* =========================================================================
    tkill (130), tgkill (131) and the abort path
    ========================================================================= *)

@@ -84,7 +84,7 @@ Proof. reflexivity. Qed.
 Lemma adv_eff_ret : forall regs pc x8 mem rom r,
   advance_past_svc (apply_effect
     {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc; ms_svc_pending := Some x8;
-       ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |} (mkEffect r [] []))
+       ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |} (mkEffect r [] []))
   = mkst (regupd regs 10 r) (v_addi pc 4) mem rom.
 Proof.
   intros regs pc x8 mem rom r.
@@ -101,7 +101,7 @@ Qed.
 Lemma adv_eff_ret_copyins : forall regs pc x8 mem rom r copyins,
   advance_past_svc (apply_effect
     {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc; ms_svc_pending := Some x8;
-       ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |}
+       ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (with_copyins copyins (mkEffect r [] [])))
   = mkst (regupd regs 10 r) (v_addi pc 4) mem rom.
 Proof.
@@ -360,7 +360,7 @@ Proof. reflexivity. Qed.
 
 Lemma ms_read_byte_rec_mrb : forall segs regs fr pc sv rv fc mem,
   ms_read_byte {| ms_regs := regs; ms_fregs := fr; ms_pc_val := pc; ms_svc_pending := sv;
-                  ms_resv := rv; ms_fcsr := fc; ms_mem := mem; ms_rom := seg_rom segs |}
+                  ms_resv := rv; ms_fcsr := fc; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}
   = mrb segs mem.
 Proof. reflexivity. Qed.
 
@@ -1890,7 +1890,7 @@ Qed.
 
 Lemma record_gpr : forall regs fr pc sv rv fc mem rom k,
   ms_gpr {| ms_regs := regs; ms_fregs := fr; ms_pc_val := pc; ms_svc_pending := sv;
-            ms_resv := rv; ms_fcsr := fc; ms_mem := mem; ms_rom := rom |} k
+            ms_resv := rv; ms_fcsr := fc; ms_mem := mem; ms_rom := rom; ms_ro := [] |} k
   = reg_get regs (Z_to_bv 5 (10 + Z.of_nat k)).
 Proof. reflexivity. Qed.
 
@@ -1901,7 +1901,7 @@ Lemma tfo_exit_rec : forall regs pc mem rom model code fsv,
   m_fs model = fsv ->
   to_fout segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                   ms_svc_pending := Some (getr regs 17);
-                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |}
+                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |}
           model (fun o => o = (code, fsv)).
 Proof.
   intros regs pc mem rom model code fsv H17 H10 Hc Hfs.
@@ -1937,20 +1937,20 @@ Lemma tfo_read_rec : forall regs pc mem rom model fdv p off data buf cnt U,
     U ->
   to_fout segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                   ms_svc_pending := Some (getr regs 17);
-                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |} model U.
+                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |} model U.
 Proof.
   intros regs pc mem rom model fdv p off data buf cnt U
     H17 H10 H11 H12 Hfd Hfd32 Hfs Hwseg Hcnt Hpos Haok Hh Hlazy Hcont.
   set (ms := {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                 ms_svc_pending := Some (getr regs 17);
-                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |}).
+                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |}).
   assert (Hg0 : ms_gpr ms 0 = fdv)
     by (unfold ms; rewrite record_gpr, arg_reg_0; exact H10).
   assert (Hg1 : ms_gpr ms 1 = buf)
     by (unfold ms; rewrite record_gpr, arg_reg_1; exact H11).
   assert (Hg2 : ms_gpr ms 2 = cnt)
     by (unfold ms; rewrite record_gpr, arg_reg_2; exact H12).
-  destruct (wseg_ok_wdef segs buf cnt ms Hwseg) as [w Hw].
+  destruct (wseg_ok_wdef segs buf cnt ms Hwseg eq_refl) as [w Hw].
   apply (tfo_read_file ms model (getr regs 17) p off data w U).
   - unfold ms. cbn [ms_svc_pending]. reflexivity.
   - exact H17.
@@ -1993,14 +1993,14 @@ Lemma tfo_write_rec : forall regs pc mem model fdv p off data bs buf cnt U,
        (with_fs (fs_set (m_fs model) p (file_write data off bs)) model)) U ->
   to_fout segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                   ms_svc_pending := Some (getr regs 17);
-                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}
+                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}
           model U.
 Proof.
   intros regs pc mem model fdv p off data bs buf cnt U
     H17 H10 H11 H12 Hfd Hfd32 Hrd Hcnt Hfs Hgap Hok Hh Hlazy Hcont.
   set (ms := {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                 ms_svc_pending := Some (getr regs 17);
-                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}).
+                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}).
   assert (Hg0 : ms_gpr ms 0 = fdv)
     by (unfold ms; rewrite record_gpr, arg_reg_0; exact H10).
   assert (Hg1 : ms_gpr ms 1 = buf)
@@ -2064,12 +2064,12 @@ Lemma tfo_close_rec : forall regs pc mem rom model fdv e U,
     (with_fds (fd_remove (m_fds model) fdv) model) U ->
   to_fout segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                   ms_svc_pending := Some (getr regs 17);
-                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |} model U.
+                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |} model U.
 Proof.
   intros regs pc mem rom model fdv e U H17 H10 Hfd Hfd32 Hh Hlazy Hcont.
   set (ms := {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                 ms_svc_pending := Some (getr regs 17);
-                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |}).
+                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |}).
   assert (Hg0 : ms_gpr ms 0 = fdv)
     by (unfold ms; rewrite record_gpr, arg_reg_0; exact H10).
   apply (tfo_close ms model (getr regs 17) e U).
@@ -2096,13 +2096,13 @@ Lemma tfo_open_enoent_rec : forall regs pc mem model p U,
           model U ->
   to_fout segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                   ms_svc_pending := Some (getr regs 17);
-                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}
+                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}
           model U.
 Proof.
   intros regs pc mem model p U H17 H10 H12 Hpath Hdot Hfs Hh Hlazy Hcont.
   set (ms := {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                 ms_svc_pending := Some (getr regs 17);
-                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}).
+                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}).
   apply (tfo_openat_enoent ms model (getr regs 17) p U).
   - unfold ms. cbn [ms_svc_pending]. reflexivity.
   - exact H17.
@@ -2144,14 +2144,14 @@ Lemma tfo_open_rd_rec : forall regs pc mem model p d
                      /\ fd = alloc_fd (m_fds model) /\ Ts fd o))) ->
   to_fout segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                   ms_svc_pending := Some (getr regs 17);
-                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}
+                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}
           model U.
 Proof.
   intros regs pc mem model p d Te Ts U
     H17 H10 H12 Hpath Hpe Hdot Hfs Hh Hlazy Herr Hok HU.
   set (ms := {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                 ms_svc_pending := Some (getr regs 17);
-                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}).
+                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}).
   apply (tfo_open_core ms model
            (fun fd => with_fds (fd_insert (m_fds model) fd
                                   (FdFile p (Z_to_bv 64 0))) model)
@@ -2207,14 +2207,14 @@ Lemma tfo_open_wr_rec : forall regs pc mem model p
                      /\ fd = alloc_fd (m_fds model) /\ Ts fd o))) ->
   to_fout segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                   ms_svc_pending := Some (getr regs 17);
-                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}
+                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}
           model U.
 Proof.
   intros regs pc mem model p Te Ts U
     H17 H10 H12 Hpath Hpe Hdot Hun Hh Hlazy Herr Hok HU.
   set (ms := {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                 ms_svc_pending := Some (getr regs 17);
-                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}).
+                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}).
   apply (tfo_open_core ms model
            (fun fd => with_fds (fd_insert (m_fds model) fd
                                   (FdFileW p (Z_to_bv 64 0)))
@@ -2261,13 +2261,13 @@ Lemma tfo_open_wr_isdir_rec : forall regs pc mem model p U,
           model U ->
   to_fout segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                   ms_svc_pending := Some (getr regs 17);
-                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}
+                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}
           model U.
 Proof.
   intros regs pc mem model p U H17 H10 H12 Hpath Hpe Hdot Hun Hh Hlazy Hcont.
   set (ms := {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                 ms_svc_pending := Some (getr regs 17);
-                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}).
+                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}).
   assert (Hchk : forall eff,
       check_syscall (sys_input segs ms (getr regs 17)) eff model
       = check_ret_only_copyins (open_copyins ms) eff
@@ -2316,13 +2316,13 @@ Lemma tfo_open_toolong_rec : forall regs pc mem model U,
           model U ->
   to_fout segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                   ms_svc_pending := Some (getr regs 17);
-                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}
+                  ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}
           model U.
 Proof.
   intros regs pc mem model U H17 Hfl Hpath Hh Hlazy Hcont.
   set (ms := {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                 ms_svc_pending := Some (getr regs 17);
-                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs |}).
+                ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := seg_rom segs; ms_ro := [] |}).
   apply (tfo_openat_toolong ms model (getr regs 17) U).
   - unfold ms. cbn [ms_svc_pending]. reflexivity.
   - exact H17.

@@ -200,12 +200,12 @@ Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_readlinkat : forall i eff m,
   bv_unsigned (in_sysno i) = 78%Z ->
-  check_syscall i eff m = check_readlinkat (fd32 (in_arg i 0)) eff m.
+  check_syscall i eff m = check_readlinkat i (fd32 (in_arg i 0)) eff m.
 Proof. intros i eff m H. unfold check_syscall. rewrite H. reflexivity. Qed.
 
 Lemma syscall_witness_readlinkat : forall i m,
   bv_unsigned (in_sysno i) = 78%Z ->
-  syscall_spec_witness i m = readlinkat_witness (fd32 (in_arg i 0)) m.
+  syscall_spec_witness i m = readlinkat_witness i (fd32 (in_arg i 0)) m.
 Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_newfstatat : forall i eff m,
@@ -310,12 +310,12 @@ Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_sched_getaffinity : forall i eff m,
   bv_unsigned (in_sysno i) = 123%Z ->
-  check_syscall i eff m = check_sched_getaffinity (in_arg i 1) eff m.
+  check_syscall i eff m = check_sched_getaffinity i (in_arg i 1) eff m.
 Proof. intros i eff m H. unfold check_syscall. rewrite H. reflexivity. Qed.
 
 Lemma syscall_witness_sched_getaffinity : forall i m,
   bv_unsigned (in_sysno i) = 123%Z ->
-  syscall_spec_witness i m = sched_getaffinity_witness (in_arg i 1) m.
+  syscall_spec_witness i m = sched_getaffinity_witness i (in_arg i 1) m.
 Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_sched_yield : forall i eff m,
@@ -420,12 +420,12 @@ Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_prctl : forall i eff m,
   bv_unsigned (in_sysno i) = 167%Z ->
-  check_syscall i eff m = check_prctl (int32 (in_arg i 0)) (in_arg i 1) eff m.
+  check_syscall i eff m = check_prctl i (int32 (in_arg i 0)) (in_arg i 1) eff m.
 Proof. intros i eff m H. unfold check_syscall. rewrite H. reflexivity. Qed.
 
 Lemma syscall_witness_prctl : forall i m,
   bv_unsigned (in_sysno i) = 167%Z ->
-  syscall_spec_witness i m = prctl_witness (int32 (in_arg i 0)) (in_arg i 1) m.
+  syscall_spec_witness i m = prctl_witness i (int32 (in_arg i 0)) (in_arg i 1) m.
 Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_gettimeofday : forall i eff m,
@@ -600,12 +600,12 @@ Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_mprotect : forall i eff m,
   bv_unsigned (in_sysno i) = 226%Z ->
-  check_syscall i eff m = check_mprotect (in_arg i 0) (in_arg i 1) (in_arg i 2) eff m.
+  check_syscall i eff m = check_mprotect (in_arg i 0) (in_arg i 1) (in_arg i 2) i eff m.
 Proof. intros i eff m H. unfold check_syscall. rewrite H. reflexivity. Qed.
 
 Lemma syscall_witness_mprotect : forall i m,
   bv_unsigned (in_sysno i) = 226%Z ->
-  syscall_spec_witness i m = mprotect_witness (in_arg i 0) (in_arg i 1) (in_arg i 2) m.
+  syscall_spec_witness i m = mprotect_witness (in_arg i 0) (in_arg i 1) (in_arg i 2) i m.
 Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma check_syscall_madvise : forall i eff m,
@@ -652,6 +652,20 @@ Lemma check_syscall_wait4 : forall i eff m,
   bv_unsigned (in_sysno i) = 260%Z ->
   check_syscall i eff m = check_wait4 i (pid32 (in_arg i 0)) (in_arg i 1) (waitopts32 (in_arg i 2)) (in_arg i 3) eff m.
 Proof. intros i eff m H. unfold check_syscall. rewrite H. reflexivity. Qed.
+
+Lemma check_syscall_riscv_hwprobe : forall i eff m,
+  bv_unsigned (in_sysno i) = 258%Z ->
+  check_syscall i eff m =
+    check_riscv_hwprobe i (in_arg i 0) (in_arg i 1) (in_arg i 2)
+      (in_arg i 3) (flag32 (in_arg i 4)) eff m.
+Proof. intros i eff m H. unfold check_syscall. rewrite H. reflexivity. Qed.
+
+Lemma syscall_witness_riscv_hwprobe : forall i m,
+  bv_unsigned (in_sysno i) = 258%Z ->
+  syscall_spec_witness i m =
+    riscv_hwprobe_witness i (in_arg i 0) (in_arg i 1) (in_arg i 2)
+      (in_arg i 3) (flag32 (in_arg i 4)) m.
+Proof. intros i m H. unfold syscall_spec_witness. rewrite H. reflexivity. Qed.
 
 Lemma syscall_witness_wait4 : forall i m,
   bv_unsigned (in_sysno i) = 260%Z ->
@@ -767,6 +781,7 @@ Ltac arm_dispatch :=
         | erewrite check_syscall_recvfrom by eassumption
         | erewrite check_syscall_recvmsg by eassumption
         | erewrite check_syscall_accept4 by eassumption
+        | erewrite check_syscall_riscv_hwprobe by eassumption
         | erewrite check_syscall_brk by eassumption
         | erewrite check_syscall_munmap by eassumption
         | erewrite check_syscall_mremap by eassumption

@@ -53,6 +53,7 @@ From LinuxProcessSemantics.LinuxProcessSem.Checks.Sys Require Export
   Kernel.Sched.Syscalls Kernel.Signal Kernel.Sys
   Kernel.Time.Hrtimer Kernel.Time.PosixTimers Kernel.Time.Time
   Net.Socket
+  Arch.Riscv.Hwprobe
   Drivers.Char.Random.
 
 (** Dispatch on the syscall number, through the one table the relational

@@ -43,7 +43,7 @@ Definition epend (regs : bvmap 5 word) (pc : word) (mem rom : word -> option byt
     (x8 : word) : machine_state :=
   {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;  (* the ambient FPState instance (= fx0), so PropExec's mkst lemmas unify *)
      ms_svc_pending := Some x8; ms_resv := None; ms_fcsr := fp_csr;
-     ms_mem := mem; ms_rom := rom |}.
+     ms_mem := mem; ms_rom := rom; ms_ro := [] |}.
 
 Lemma step_ecall_epend : forall segs regs pc mem rom w,
   fetch_word segs pc = Some w -> is_ecall w = true ->

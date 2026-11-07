@@ -426,7 +426,7 @@ Lemma tw_write_ret : forall segs regs pc mem rom buf bufs code,
   reg_get regs 10 = Z_to_bv 64 1 ->
   ms_read_bytes {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                    ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-                   ms_mem := mem; ms_rom := rom |}
+                   ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (reg_get regs 11) (reg_get regs 12) = Some buf ->
   (1 <= length buf)%nat ->
   (forall n, (1 <= n)%nat -> (n <= length buf)%nat ->
@@ -434,7 +434,7 @@ Lemma tw_write_ret : forall segs regs pc mem rom buf bufs code,
                          (v_addi pc 4) mem rom) bufs code) ->
   to_wexit segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                    ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-                   ms_mem := mem; ms_rom := rom |}
+                   ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (buf :: bufs) code.
 Proof.
   intros segs regs pc mem rom buf bufs code H17 H10 Hr Hnb Hcont.
@@ -453,12 +453,12 @@ Lemma tw_exit_coden : forall segs regs pc mem rom (c : word),
   reg_get regs 10 = c -> (bv_unsigned c < 256)%Z ->
   to_wexit segs {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                    ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-                   ms_mem := mem; ms_rom := rom |} [] c.
+                   ms_mem := mem; ms_rom := rom; ms_ro := [] |} [] c.
 Proof.
   intros segs regs pc mem rom c H17 H10 Hc.
   assert (Hg : bv_and (ms_gpr {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                                  ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-                                 ms_mem := mem; ms_rom := rom |} 0)
+                                 ms_mem := mem; ms_rom := rom; ms_ro := [] |} 0)
                       (Z_to_bv 64 255) = c).
   { unfold ms_gpr. cbn [ms_regs]. rewrite arg_reg_0, H10.
     apply land_255_small. exact Hc. }

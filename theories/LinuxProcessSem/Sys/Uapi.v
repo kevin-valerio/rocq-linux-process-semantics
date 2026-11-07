@@ -243,6 +243,28 @@ Definition urandom_path : path :=
    Z_to_bv 8 117; Z_to_bv 8 114; Z_to_bv 8 97; Z_to_bv 8 110; Z_to_bv 8 100;
    Z_to_bv 8 111; Z_to_bv 8 109].
 
+(** The process's virtual maps file, shared by openat and fstat. *)
+Definition proc_self_maps_path : path :=
+  map (Z_to_bv 8)
+    [47%Z; 112%Z; 114%Z; 111%Z; 99%Z; 47%Z; 115%Z; 101%Z;
+     108%Z; 102%Z; 47%Z; 109%Z; 97%Z; 112%Z; 115%Z].
+
+(** The transparent hugepage size attribute under sysfs.  The RISC-V
+    PMD_SHIFT is 21, so HPAGE_PMD_SIZE is 2097152 bytes.  The sysfs
+    show function prints that value followed by a newline. *)
+Definition hpage_pmd_size_path : path :=
+  map (Z_to_bv 8)
+    [47%Z; 115%Z; 121%Z; 115%Z; 47%Z; 107%Z; 101%Z; 114%Z;
+     110%Z; 101%Z; 108%Z; 47%Z; 109%Z; 109%Z; 47%Z; 116%Z;
+     114%Z; 97%Z; 110%Z; 115%Z; 112%Z; 97%Z; 114%Z; 101%Z;
+     110%Z; 116%Z; 95%Z; 104%Z; 117%Z; 103%Z; 101%Z; 112%Z;
+     97%Z; 103%Z; 101%Z; 47%Z; 104%Z; 112%Z; 97%Z; 103%Z;
+     101%Z; 95%Z; 112%Z; 109%Z; 100%Z; 95%Z; 115%Z; 105%Z;
+     122%Z; 101%Z].
+
+Definition hpage_pmd_size_bytes : list byte :=
+  map (Z_to_bv 8) [50%Z; 48%Z; 57%Z; 55%Z; 49%Z; 53%Z; 50%Z; 10%Z].
+
 (* =========================================================================
    Sockets: constants, argument decoding, and the trace channel
    ========================================================================= *)
@@ -377,12 +399,14 @@ Definition MAP_FIXED_NOREPLACE : Z := 1048576%Z.  (* 0x100000 *)
 Definition MREMAP_MAYMOVE : Z := 1%Z.
 
 (** madvise advice values (asm-generic, as on riscv64):
-    [#define MADV_DONTNEED 4] (include/uapi/asm-generic/mman-common.h:49,
+    [#define MADV_DONTNEED 4] and [#define MADV_NOHUGEPAGE 15]
+    (include/uapi/asm-generic/mman-common.h,
     Linux v6.18.46).  Architecture-independent for the same reason the
     MREMAP_ bits are: riscv64 carries no uapi mman.h of its own, and the
     arch-generic mman.h defines no MADV_ value, so mman-common.h is the
-    sole definition.  [Mm.Madvise.madvise_dontneed_b] is the one reader. *)
+    sole definition.  [Mm.Madvise] reads these values. *)
 Definition MADV_DONTNEED : Z := 4%Z.
+Definition MADV_NOHUGEPAGE : Z := 15%Z.
 
 (** getrandom flag bits (include/uapi/linux/random.h). *)
 Definition GRND_NONBLOCK : Z := 1%Z.
@@ -479,6 +503,8 @@ Definition O_NOATIME  : Z := 262144%Z.   (* 01000000 *)
 (** [RLIMIT_CORE], the maximum size of a core dump (Linux v6.10-v6.15,
     include/uapi/asm-generic/resource.h, byte-identical at all six tags). *)
 Definition RLIMIT_CORE : Z := 4%Z.
+Definition RLIMIT_STACK : Z := 3%Z.
+Definition RLIMIT_NOFILE : Z := 7%Z.
 
 (** The POSIX clock ids the model interprets
     (include/uapi/linux/time.h, Linux v6.10-v6.15 and v6.18.46; the id
@@ -1008,7 +1034,7 @@ Definition NEW_UTS_LEN : Z := 64%Z.
     [machine], [domainname], at offsets 0, 65, 130, 195, 260 and 325. *)
 Definition NEW_UTSNAME_SIZE : Z := 390%Z.
 
-(** [PR_CAPBSET_READ], the one [prctl] option this model answers
+(** [PR_CAPBSET_READ], a [prctl] option this model answers
     (include/uapi/linux/prctl.h, Linux v6.18.46, commit 1f99e9ab748f).
     It is NOT handled in kernel/sys.c's own [switch]: the LSM hook
     [security_task_prctl] runs first, and capability's implementation of
@@ -1016,6 +1042,11 @@ Definition NEW_UTSNAME_SIZE : Z := 390%Z.
     and returns before the syscall body's [switch] is reached.  See
     [Kernel.Sys.prctl_spec], which is where the whole argument lives. *)
 Definition PR_CAPBSET_READ : Z := 23%Z.
+
+(** [PR_SET_VMA] and its anonymous-name suboption in
+    include/uapi/linux/prctl.h at Linux v6.18.46. *)
+Definition PR_SET_VMA : Z := 0x53564d41%Z.
+Definition PR_SET_VMA_ANON_NAME : Z := 0%Z.
 
 (** [CAP_LAST_CAP], the highest capability number the kernel recognises:
     [CAP_CHECKPOINT_RESTORE], 40 (include/uapi/linux/capability.h, Linux
@@ -1227,6 +1258,15 @@ Definition stat_devnull_ok (bs : list byte) : bool := stat_chrdev_ok DEVNULL_RDE
 Definition URANDOM_RDEV : Z := 265%Z.
 
 Definition stat_urandom_ok (bs : list byte) : bool := stat_chrdev_ok URANDOM_RDEV bs.
+
+(** /proc/self/maps is a procfs regular inode with 0444 permissions.
+    Its read data is generated on demand; inode_init_always starts its
+    size and block count at zero, and proc_pid_make_inode does not alter
+    either.  REG("maps", S_IRUGO, ...) supplies the mode. *)
+Definition stat_proc_maps_ok (bs : list byte) : bool :=
+  (Z.eqb (stat_field_le ST_MODE_OFF 4 bs) (S_IFREG + 292)
+   && Z.eqb (stat_field_le ST_SIZE_OFF 8 bs) 0
+   && Z.eqb (stat_field_le ST_BLOCKS_OFF 8 bs) 0)%bool.
 
 (** Byte-list equality, for comparing a delivered [struct stat] against
     a pin.  [Fs.path_eqb] is the same function over the same type; a
