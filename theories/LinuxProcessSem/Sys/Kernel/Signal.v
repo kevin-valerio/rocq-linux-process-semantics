@@ -1294,8 +1294,9 @@ Definition ss_oldstack_spec (uoss : word) (autodisarm : bool)
          fired above it: it needs [ss_sp] and [ss_size] to equal a
          stored pair that the invariant makes (NULL, 0), and that shape
          is arm 7's, already declined.
-      9. otherwise the install succeeds: 0, and the bit is set — this is
-         the only arm that raises [sas_ss_size] above zero, and the
+      9. otherwise the install succeeds: 0, the stack is installed, and
+         the stored SS_AUTODISARM bit becomes the caller's.  This is the
+         only arm that raises [sas_ss_size] above zero, and the
          [Uapi.MINSIGSTKSZ] bound arm 8 just applied is why.
 
     The old-stack query writes 24 bytes.  Copy-in of [uss] is read into
@@ -1321,7 +1322,8 @@ Definition sigaltstack_spec (uss uoss : word) : Sys SyscallEffect :=
         then unmodeled
         else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
         then err_ret ENOMEM
-        else set_sigaltstack_installed ;; ret_only (Z_to_bv 64 0)
+        else modify (with_sigaltstack_autodisarm (ss_autodisarm_set fl)) ;;
+             set_sigaltstack_installed ;; ret_only (Z_to_bv 64 0)
     end.
 
 (* =========================================================================
