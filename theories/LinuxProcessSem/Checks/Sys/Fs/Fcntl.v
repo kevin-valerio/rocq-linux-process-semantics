@@ -19,18 +19,24 @@ From LinuxProcessSemantics.LinuxProcessSem.Checks.Sys Require Export
 (** fcntl: a closed fd is -EBADF whatever the command; on an open one
     F_SETFD answers 0 for any arg, an F_SETFL that provably changes
     nothing answers 0, F_GETFL answers the flag word on the fd kinds
-    [Fcntl.getfl_f_flags] can derive it for, and every other command is
-    unmodeled. *)
+    [Fcntl.getfl_f_flags] can derive it for, F_GETFD reads the tracked
+    channel descriptor bit, and every other command is unmodeled. *)
 Definition check_fcntl (fd cmd arg : word) (eff : SyscallEffect) (m : Model)
     : check_result :=
   match fd_lookup (m_fds m) fd with
   | None => check_ret_only eff (errno_ret EBADF) m []
   | Some e =>
-      if bv_eqb cmd F_SETFD then check_ret_only eff (Z_to_bv 64 0) m []
+      if bv_eqb cmd F_SETFD then
+        check_ret_only eff (Z_to_bv 64 0) (setfd_model fd arg e m) []
       else if bv_eqb cmd F_SETFL && setfl_noop_on e arg
       then check_ret_only eff (Z_to_bv 64 0) m []
       else if bv_eqb cmd F_GETFL then
-        match getfl_f_flags e with
+        match getfl_f_flags m e with
+        | Some fl => check_ret_only eff fl m []
+        | None => CheckUnmodeled
+        end
+      else if bv_eqb cmd F_GETFD then
+        match getfd_flags m fd e with
         | Some fl => check_ret_only eff fl m []
         | None => CheckUnmodeled
         end
@@ -46,16 +52,21 @@ Proof.
   - destruct (bv_eqb cmd F_SETFD) eqn:Hd.
     + apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
       eapply bind_ok0; [apply get_model_ok|]. cbv beta iota.
-      srw Hfd. apply pure_ok.
+      srw Hfd. eapply bind_ok0; [apply modify_ok|apply pure_ok].
     + destruct (bv_eqb cmd F_SETFL && setfl_noop_on e arg) eqn:Hl.
       * apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
         eapply bind_ok0; [apply get_model_ok|]. cbv beta iota.
         srw Hfd. srw Hl. apply pure_ok.
-      * destruct (bv_eqb cmd F_GETFL) eqn:Hg; [|discriminate].
-        destruct (getfl_f_flags e) as [fl|] eqn:Hgf; [|discriminate].
-        apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
-        eapply bind_ok0; [apply get_model_ok|]. cbv beta iota.
-        srw Hfd. srw Hl. srw Hgf. apply pure_ok.
+      * destruct (bv_eqb cmd F_GETFL) eqn:Hg.
+        -- destruct (getfl_f_flags m e) as [fl|] eqn:Hgf; [|discriminate].
+           apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
+           eapply bind_ok0; [apply get_model_ok|]. cbv beta iota.
+           srw Hfd. srw Hl. srw Hgf. apply pure_ok.
+        -- destruct (bv_eqb cmd F_GETFD) eqn:Hfdcmd; [|discriminate].
+           destruct (getfd_flags m fd e) as [fl|] eqn:Hgf; [|discriminate].
+           apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
+           eapply bind_ok0; [apply get_model_ok|]. cbv beta iota.
+           srw Hfd. srw Hl. srw Hgf. apply pure_ok.
   - apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
     eapply bind_ok0; [apply get_model_ok|]. cbv beta iota.
     srw Hfd. apply pure_ok.
@@ -72,12 +83,17 @@ Proof.
     + destruct (bv_eqb cmd F_SETFL && setfl_noop_on e arg) eqn:Hl.
       * now apply check_ret_only_no_unmodeled in H.
       * destruct (bv_eqb cmd F_GETFL) eqn:Hg.
-        -- destruct (getfl_f_flags e) as [fl|] eqn:Hgf.
+        -- destruct (getfl_f_flags m e) as [fl|] eqn:Hgf.
            ++ now apply check_ret_only_no_unmodeled in H.
            ++ eapply bind_unmodeled2; [apply get_model_ok|]. cbv beta iota.
               srw Hfd. srw Hl. srw Hgf. apply unmodeled_intro.
-        -- eapply bind_unmodeled2; [apply get_model_ok|]. cbv beta iota.
-           srw Hfd. srw Hl. apply unmodeled_intro.
+        -- destruct (bv_eqb cmd F_GETFD) eqn:Hfdcmd.
+           ++ destruct (getfd_flags m fd e) as [fl|] eqn:Hgf.
+              ** now apply check_ret_only_no_unmodeled in H.
+              ** eapply bind_unmodeled2; [apply get_model_ok|]. cbv beta iota.
+                 srw Hfd. srw Hl. srw Hgf. apply unmodeled_intro.
+           ++ eapply bind_unmodeled2; [apply get_model_ok|]. cbv beta iota.
+              srw Hfd. srw Hl. apply unmodeled_intro.
   - now apply check_ret_only_no_unmodeled in H.
 Qed.
 
@@ -88,13 +104,13 @@ Proof.
   unfold fcntl_spec in H. unfold check_fcntl. sys_unfold.
   cbv iota in H. inv_ok.
   destruct (fd_lookup (m_fds m) fd) as [e|] eqn:Hfd; hall Hfd; inv_ok;
-    try (destruct (bv_eqb cmd F_SETFD) eqn:Hd; hall Hd; inv_ok;
-         try (destruct (bv_eqb cmd F_SETFL && setfl_noop_on e arg) eqn:Hl;
-              hall Hl; inv_ok;
-              try (destruct (bv_eqb cmd F_GETFL) eqn:Hg; hall Hg; inv_ok;
-                   try (destruct (getfl_f_flags e) as [fl|] eqn:Hgf;
-                        hall Hgf; inv_ok))));
-    cbn; try rewrite bv_eqb_refl; try rewrite Z.eqb_refl; reflexivity.
+  try (destruct (bv_eqb cmd F_SETFD) eqn:Hd; hall Hd; inv_ok);
+  try (destruct (bv_eqb cmd F_SETFL && setfl_noop_on e arg) eqn:Hl; hall Hl; inv_ok);
+  try (destruct (bv_eqb cmd F_GETFL) eqn:Hg; hall Hg; inv_ok);
+  try (destruct (getfl_f_flags m e) as [flstatus|] eqn:Hgf; hall Hgf; inv_ok);
+  try (destruct (bv_eqb cmd F_GETFD) eqn:Hfdcmd; hall Hfdcmd; inv_ok);
+  try (destruct (getfd_flags m fd e) as [flfd|] eqn:Hgetfd; hall Hgetfd; inv_ok);
+  cbn; try rewrite bv_eqb_refl; try rewrite Z.eqb_refl; reflexivity.
 Qed.
 
 Lemma check_fcntl_complete_unmodeled : forall fd cmd arg m i eff,
@@ -104,11 +120,11 @@ Proof.
   unfold fcntl_spec in H. unfold check_fcntl. sys_unfold.
   cbv iota in H. inv_ok.
   destruct (fd_lookup (m_fds m) fd) as [e|] eqn:Hfd; hall Hfd; inv_ok;
-    try (destruct (bv_eqb cmd F_SETFD) eqn:Hd; hall Hd; inv_ok;
-         try (destruct (bv_eqb cmd F_SETFL && setfl_noop_on e arg) eqn:Hl;
-              hall Hl; inv_ok;
-              try (destruct (bv_eqb cmd F_GETFL) eqn:Hg; hall Hg; inv_ok;
-                   try (destruct (getfl_f_flags e) as [fl|] eqn:Hgf;
-                        hall Hgf; inv_ok))));
-    reflexivity.
+  try (destruct (bv_eqb cmd F_SETFD) eqn:Hd; hall Hd; inv_ok);
+  try (destruct (bv_eqb cmd F_SETFL && setfl_noop_on e arg) eqn:Hl; hall Hl; inv_ok);
+  try (destruct (bv_eqb cmd F_GETFL) eqn:Hg; hall Hg; inv_ok);
+  try (destruct (getfl_f_flags m e) as [flstatus|] eqn:Hgf; hall Hgf; inv_ok);
+  try (destruct (bv_eqb cmd F_GETFD) eqn:Hfdcmd; hall Hfdcmd; inv_ok);
+  try (destruct (getfd_flags m fd e) as [flfd|] eqn:Hgetfd; hall Hgetfd; inv_ok);
+  reflexivity.
 Qed.

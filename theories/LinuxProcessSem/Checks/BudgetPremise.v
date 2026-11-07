@@ -1112,7 +1112,7 @@ Definition touch_ms : machine_state := {|
     match memory_read touch_segments addr 1 with
     | Some (b :: _) => Some b
     | _ => None
-    end |}.
+    end; ms_ro := [] |}.
 
 (** The model: the page is a lazy reservation and nothing is charged
     yet, at budget [lim].  SYNTHETIC — the lazy range has no [vm_maps]
@@ -1201,7 +1201,7 @@ Definition wtouch_ms : machine_state := {|
   ms_svc_pending := Some (Z_to_bv 64 64);
   ms_resv := None; ms_fcsr := Z_to_bv 32 0;
   ms_mem := fun a => if bv_eqb a (Z_to_bv 64 0x1000) then Some (Z_to_bv 8 0) else None;
-  ms_rom := fun _ => None |}.
+  ms_rom := fun _ => None; ms_ro := [] |}.
 
 Definition wtouch_model : Model :=
   with_vm_backing [(0, 0x2000)] [0]

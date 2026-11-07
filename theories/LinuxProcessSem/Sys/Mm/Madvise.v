@@ -18,9 +18,10 @@ Import ListNotations.
 Open Scope bv_scope.
 Open Scope sys_scope.
 
-(** [madvise addr len advice].  ONE advice value is answered, MADV_DONTNEED,
-    over a range the ledger describes completely; every other advice value
-    declines.  What the arm exists for is the backed-memory budget: a
+(** [madvise addr len advice].  MADV_DONTNEED is answered over a range
+    the ledger describes completely.  MADV_NOHUGEPAGE is also answered
+    over a recorded anonymous mapping.  Other advice values decline.
+    What the DONTNEED arm exists for is the backed-memory budget: a
     MAP_NORESERVE page is charged to [State.vm_limit] on its first touch
     ([State.materialize_model_accesses]), and without this arm only an
     unmap of the whole mapping would give that charge back.  A runtime
@@ -149,8 +150,8 @@ Open Scope sys_scope.
     [State.vm_backing_used] rests on is untouched — this is a reader of
     the lazy ledger, not a third writer.
 
-    Nothing here is nondeterministic and no errno is injectable: the
-    only failures [do_madvise] can report on the answered shape are the
+    The DONTNEED result is deterministic and no errno is injectable: the
+    only failures [do_madvise] can report on that answered shape are the
     -EINTR of a killable write lock, which DONTNEED does not take
     ([get_lock_mode] gives it MADVISE_VMA_READ_LOCK), and the walk's
     -ENOMEM, which the containment gate excludes.  A forged nonzero
@@ -165,6 +166,29 @@ Open Scope sys_scope.
     high half is discarded before the switch reads it. *)
 Definition madvise_dontneed_b (advice : word) : bool :=
   Z.eqb (bv_unsigned advice) MADV_DONTNEED.
+
+(** Linux accepts this hint when transparent huge pages are enabled and
+    marks the VMA [VM_NOHUGEPAGE].  The modeled memory bytes do not change.
+    A kernel without that configuration returns -EINVAL; a VMA split can
+    return -EAGAIN after [madvise_vma_behavior] converts -ENOMEM.  QEMU
+    user mode accepts the hint without passing it to the host. *)
+Definition madvise_nohuge_b (advice : word) : bool :=
+  Z.eqb (bv_unsigned advice) MADV_NOHUGEPAGE.
+
+(** Only a recorded anonymous mapping gives the model enough VMA
+    information to answer this nonempty request.  PROT_NONE pages are
+    accepted because this advice changes policy, not readable bytes. *)
+Definition madvise_nohuge_ok (h : VmMaps) (addr n : word) : bool :=
+  region_free (vm_reserved h) addr n
+  && map_contains (vm_maps h) addr n.
+
+Definition madvise_nohuge_ret_okb (allow_eagain : bool) (r : word) : bool :=
+  w_is0 r || bv_eqb r (errno_ret EINVAL)
+  || (allow_eagain && bv_eqb r (errno_ret EAGAIN)).
+
+Definition madvise_nohuge_result (allow_eagain : bool) : Sys SyscallEffect :=
+  r <- choose (fun r => madvise_nohuge_ret_okb allow_eagain r = true) ;;
+  ret_only r.
 
 (** The answered shape's ledger gate (see the header): inside one live
     anonymous mapping, clear of the image, every page read-write. *)
@@ -244,8 +268,21 @@ Definition madvise_dontneed_next (m : Model) (addr n : word) : Model :=
                            (bv_unsigned addr + bv_unsigned n))
        (m_vm_materialized m)) m.
 
+Definition madvise_nohuge_spec (addr len : word) : Sys SyscallEffect :=
+  if w_is0 len then madvise_nohuge_result false
+  else if (two_pow_64 <=? bv_unsigned addr + page_round_up_Z (bv_unsigned len))%Z
+  then err_ret EINVAL
+  else
+    m <- get_model ;;
+    let h := m_vmmaps m in
+    let nZ := page_round_up_Z (bv_unsigned len) in
+    let n := Z_to_bv 64 nZ in
+    if madvise_nohuge_ok h addr n then madvise_nohuge_result true
+    else unmodeled.
+
 Definition madvise_spec (addr len advice : word) : Sys SyscallEffect :=
   if negb (Z.eqb (bv_unsigned addr mod page_size) 0) then err_ret EINVAL
+  else if madvise_nohuge_b advice then madvise_nohuge_spec addr len
   else if negb (madvise_dontneed_b advice) then unmodeled
   else if w_is0 len then ret_only (Z_to_bv 64 0)
   else if (two_pow_64 <=? bv_unsigned addr + page_round_up_Z (bv_unsigned len))%Z

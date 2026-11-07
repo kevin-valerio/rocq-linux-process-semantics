@@ -23,6 +23,44 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Cases Require Export
   Prelude Fs.ReadWrite Kernel.Fork.
 
+(** Go passes a short NUL-terminated name from its stack after an
+    anonymous mmap.  The copy-in includes the terminator. *)
+Definition vma_name_mem : word -> option byte :=
+  bytes_at 4096 (map (Z_to_bv 8)
+    [32%Z; 71%Z; 111%Z; 58%Z; 32%Z; 104%Z; 101%Z; 97%Z; 112%Z; 0%Z]).
+
+Definition vma_name_input (addr : word) : SyscallInput :=
+  mkInput 167 [Z_to_bv 64 PR_SET_VMA; 0; addr; 4096; 4096; 0]
+    vma_name_mem (fun _ => None).
+
+Example prctl_vma_name_enabled_success :
+  check_syscall (vma_name_input 65536)
+    (with_copyins [(4096, 10%nat)] (mkEffect 0 [] [])) one_map_model
+  = CheckOk one_map_model [].
+Proof. check_eq. Qed.
+
+Example prctl_vma_name_disabled_config :
+  check_syscall (vma_name_input 65536)
+    (mkEffect (errno_ret EINVAL) [] []) one_map_model
+  = CheckOk one_map_model [].
+Proof. check_eq. Qed.
+
+Example prctl_vma_name_allocation_failure :
+  check_syscall (vma_name_input 65536)
+    (with_copyins [(4096, 10%nat)] (mkEffect (errno_ret ENOMEM) [] []))
+    one_map_model = CheckOk one_map_model [].
+Proof. check_eq. Qed.
+
+Example prctl_vma_name_requires_copyin :
+  check_syscall (vma_name_input 65536)
+    (mkEffect 0 [] []) one_map_model = CheckReject.
+Proof. check_eq. Qed.
+
+Example prctl_vma_name_outside_mapping :
+  check_syscall (vma_name_input 69632)
+    (mkEffect 0 [] []) one_map_model = CheckUnmodeled.
+Proof. check_eq. Qed.
+
 (** The same envelope bound, for [getpid].  Earns its place by reason 1:
     it is a [forall] over admissible outcomes, and a finite set of runs
     can SAMPLE the envelope but cannot quantify over it.
@@ -229,6 +267,130 @@ Example uname_wrapping_destination_rejects_the_copy :
     (mkEffect 0 [(uts_wrap_name, uts_demo)] []) uts_model
   = CheckReject.
 Proof. vm_compute. reflexivity. Qed.
+
+Definition rlim_stack_bytes : list byte :=
+  word_le8 (Z_to_bv 64 stack_max_size) ++
+  word_le8 (Z_to_bv 64 (two_pow_64 - 1)).
+
+Example prlimit64_stack_first_read_pins :
+  check_syscall (mkInput 261 [0; 3; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_stack_bytes)] []) rlim_model
+  = CheckOk (with_rlimit_stack rlim_stack_bytes rlim_model) [].
+Proof. check_eq. Qed.
+
+Example prlimit64_stack_wrong_soft_rejected :
+  check_syscall (mkInput 261 [0; 3; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 3 7)] []) rlim_model
+  = CheckReject.
+Proof. check_eq. Qed.
+
+Example prlimit64_stack_repeated_read :
+  check_syscall (mkInput 261 [0; 3; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_stack_bytes)] [])
+    (with_rlimit_stack rlim_stack_bytes rlim_model)
+  = CheckOk (with_rlimit_stack rlim_stack_bytes rlim_model) [].
+Proof. check_eq. Qed.
+
+Example prlimit64_stack_set_unmodeled :
+  check_syscall (mkInput 261 [0; 3; 8192; 0; 0; 0]
+                   (rlim_src_at 0 7) (fun _ => None))
+    (mkEffect 0 [] []) rlim_model = CheckUnmodeled.
+Proof. check_eq. Qed.
+
+Definition rlim_nofile_model : Model :=
+  with_nofile (Z_to_bv 64 1048576) rlim_model.
+
+Definition rlim_nofile_bytes : list byte :=
+  word_le8 (Z_to_bv 64 1048576) ++ word_le8 (Z_to_bv 64 1048576).
+
+Example prlimit64_nofile_first_read_pins :
+  check_syscall (mkInput 261 [0; 7; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_nofile_bytes)] []) rlim_nofile_model
+  = CheckOk (with_rlimit_nofile rlim_nofile_bytes rlim_nofile_model) [].
+Proof. check_eq. Qed.
+
+Example prlimit64_nofile_soft_mismatch_rejected :
+  check_syscall (mkInput 261 [0; 7; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 3 7)] []) rlim_nofile_model
+  = CheckReject.
+Proof. check_eq. Qed.
+
+Example prlimit64_nofile_low_limit_unmodeled :
+  check_syscall (mkInput 261 [0; 7; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 3 7)] []) rlim_model
+  = CheckUnmodeled.
+Proof. check_eq. Qed.
+
+Example prlimit64_nofile_repeated_read :
+  check_syscall (mkInput 261 [0; 7; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_nofile_bytes)] [])
+    (with_rlimit_nofile rlim_nofile_bytes rlim_nofile_model)
+  = CheckOk (with_rlimit_nofile rlim_nofile_bytes rlim_nofile_model) [].
+Proof. check_eq. Qed.
+
+Definition rlim_nofile_low_model : Model :=
+  with_nofile 8194 rlim_model.
+Definition rlim_nofile_low_pair : list byte :=
+  word_le8 8194 ++ word_le8 8196.
+Definition rlim_nofile_raised_pair : list byte :=
+  word_le8 8195 ++ word_le8 8196.
+Definition rlim_nofile_low_pinned : Model :=
+  with_rlimit_nofile rlim_nofile_low_pair rlim_nofile_low_model.
+Definition rlim_nofile_src (bs : list byte) (a : word) : option byte :=
+  if (8192 <=? bv_unsigned a)%Z && (bv_unsigned a <? 8208)%Z
+  then nth_error bs (Z.to_nat (bv_unsigned a - 8192))
+  else None.
+
+(** Go raises 8194 to 8195 when the hard limit is 8196.  The copy-in
+    records the 16 bytes and both views of the limit change together. *)
+Example prlimit64_nofile_go_raise :
+  check_syscall
+    (mkInput 261 [0; 7; 8192; 0; 0; 0]
+      (rlim_nofile_src rlim_nofile_raised_pair) (fun _ => None))
+    (with_copyins [(8192, 16%nat)] (mkEffect 0 [] []))
+    rlim_nofile_low_pinned
+  = CheckOk (with_nofile_pair 8195 rlim_nofile_raised_pair
+               rlim_nofile_low_pinned) [].
+Proof. check_eq. Qed.
+
+Example prlimit64_nofile_go_raise_eperm_keeps_limit :
+  check_syscall
+    (mkInput 261 [0; 7; 8192; 0; 0; 0]
+      (rlim_nofile_src rlim_nofile_raised_pair) (fun _ => None))
+    (with_copyins [(8192, 16%nat)] (mkEffect (errno_ret EPERM) [] []))
+    rlim_nofile_low_pinned = CheckOk rlim_nofile_low_pinned [].
+Proof. check_eq. Qed.
+
+Example prlimit64_nofile_read_after_raise :
+  check_syscall (mkInput 261 [0; 7; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_nofile_raised_pair)] [])
+    (with_nofile_pair 8195 rlim_nofile_raised_pair rlim_nofile_low_pinned)
+  = CheckOk (with_nofile_pair 8195 rlim_nofile_raised_pair
+               rlim_nofile_low_pinned) [].
+Proof. check_eq. Qed.
+
+Example prlimit64_nofile_old_pair_rejected_after_raise :
+  check_syscall (mkInput 261 [0; 7; 0; 4096; 0; 0] (fun _ => None) rlim_out)
+    (mkEffect 0 [(4096, rlim_nofile_low_pair)] [])
+    (with_nofile_pair 8195 rlim_nofile_raised_pair rlim_nofile_low_pinned)
+  = CheckReject.
+Proof. check_eq. Qed.
+
+Example prlimit64_nofile_invalid_pair_einval :
+  check_syscall
+    (mkInput 261 [0; 7; 8192; 0; 0; 0]
+      (rlim_nofile_src (word_le8 8197 ++ word_le8 8196)) (fun _ => None))
+    (with_copyins [(8192, 16%nat)] (mkEffect (errno_ret EINVAL) [] []))
+    rlim_nofile_low_pinned = CheckOk rlim_nofile_low_pinned [].
+Proof. check_eq. Qed.
+
+Example prlimit64_nofile_changed_hard_unmodeled :
+  check_syscall
+    (mkInput 261 [0; 7; 8192; 0; 0; 0]
+      (rlim_nofile_src (word_le8 8195 ++ word_le8 8197)) (fun _ => None))
+    (with_copyins [(8192, 16%nat)] (mkEffect 0 [] []))
+    rlim_nofile_low_pinned = CheckUnmodeled.
+Proof. check_eq. Qed.
 
 Example prlimit64_first_read_pins :
   check_syscall (mkInput 261 [0; 4; 0; 4096; 0; 0] (fun _ => None) rlim_out)

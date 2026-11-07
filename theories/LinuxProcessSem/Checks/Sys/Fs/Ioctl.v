@@ -25,7 +25,7 @@ Definition check_ioctl (fd req : word) (eff : SyscallEffect) (m : Model)
   | Some (FdFileRW _ _) | Some (FdDevNull _ _) =>
       if tty_only_request req then check_ret_only eff (errno_ret ENOTTY) m []
       else CheckUnmodeled
-  | Some FdUrandom => CheckUnmodeled
+  | Some FdUrandom | Some (FdProcMaps _) | Some (FdHpagePmdSize _) => CheckUnmodeled
   end.
 
 Lemma check_ioctl_sound_ok : forall fd req eff m m' evs i,

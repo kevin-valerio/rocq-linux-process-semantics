@@ -18,8 +18,8 @@ Import ListNotations.
 Open Scope bv_scope.
 Open Scope sys_scope.
 
-(** mprotect: ENOMEM only, and only on the branch that turns an
-    inaccessible range read-write.  Every other failure a real kernel
+(** mprotect: ENOMEM on permission transitions that can split a VMA or
+    allocate metadata.  Every other failure a real kernel
     could report is either impossible once the argument gates below have
     passed, or outside the modeled syscall surface (Linux v6.18.46,
     mm/mprotect.c [do_mprotect_pkey] / [mprotect_fixup], on riscv64):
@@ -108,8 +108,9 @@ Definition mprotect_errnos : list Z := [ENOMEM].
     return).  The wrap check at :733 sits in that same window, so a
     wrapping range is -ENOMEM for every [prot] too.
 
-    The supported NONEMPTY operation is exactly PROT_READ|PROT_WRITE over
-    one tracked anonymous range.  On an already-rw
+    The supported NONEMPTY operations include PROT_READ|PROT_WRITE over
+    one tracked anonymous range and PROT_READ over a writable reserved
+    image range of at most 64 KiB.  On an already-rw
     subrange it is a no-op; on one contained [vm_noaccess] interval it removes
     that interval (splitting when necessary) and exposes fresh zeroes through
     [eff_zeros], provided the resulting backing fits [vm_limit].  Ordinary
@@ -118,9 +119,9 @@ Definition mprotect_errnos : list Z := [ENOMEM].
     Linux's: [mprotect_fixup] (mm/mprotect.c, Linux v6.12) takes the commit
     charge when a private mapping turns writable, but guards it with
     [if (!(oldflags & VM_NORESERVE))], so a range mapped MAP_NORESERVE is
-    never charged at the transition.  Unmapped,
-    mixed-protection, image, and spanning ranges fail
-    closed.  Every other [prot] is unmodeled at nonzero length:
+    never charged at the transition.  Unmapped, mixed-protection, and
+    spanning ranges fail closed.  Every other [prot] is unmodeled at
+    nonzero length:
 
     - PROT_EXEC (bit 2) would make a data page executable.  The model cannot
       fetch from it AT ALL, so answering 0 and letting the source jump
@@ -128,38 +129,12 @@ Definition mprotect_errnos : list Z := [ENOMEM].
       fine on Linux — [Run.all_traces_error] holds, [Equivalence.equiv]'s
       escape fires, and any target is accepted.  Declining instead makes
       the call [Run.unmodeled_at], which [Equivalence.modeled] rejects.
-    - mprotect to PROT_NONE, or dropping 'w'/'r', would require preserving
-      arbitrary old contents behind a permission transition.  The bounded
-      ledger intentionally supports only zero-backed pages created as
-      PROT_NONE by anonymous mmap/MAP_FIXED.
-
-      PROT_READ ALONE is the shape a real allocator reaches for — fill a
-      buffer, then downgrade it — so it is worth saying what stops it
-      here rather than leaving the reader to conclude the gap is an
-      oversight.  Linux takes it on the ordinary path — mm/mprotect.c
-      [do_mprotect_pkey] / [mprotect_fixup] compute newflags from prot
-      and clear VM_WRITE — so the mapping stays live and readable with
-      its contents intact.  What the MODEL lacks is anywhere to
-      put such a page.  Anonymous memory has exactly one representation,
-      [RiscvSemantics.machine_state]'s writable overlay [ms_mem], and that
-      one map answers two different questions: it is the only source of
-      readable anonymous bytes ([RiscvSemantics.ov_read_bytes] falls back
-      to the loaded segments, never to [ms_rom]), and it is the whole of
-      the writable view ([RiscvSemantics.wview], hence
-      [RiscvSemantics.store_ok] and the [State.in_wmem] gate every spec
-      checks an output buffer against).  So a page that is readable and
-      not writable has no encoding: leave the bytes in [ms_mem] and the
-      model admits a store Linux answers with SIGSEGV and a syscall
-      output buffer Linux answers with -EFAULT; take them out and a load
-      Linux serves faults instead — the direction the PROT_EXEC note
-      above rejects, since [Run.all_traces_error] then frees the target.
-      Modelling it is therefore not a new arm but a new dimension: a
-      channel from a [State.SyscallEffect] to the read-only view (nothing
-      else reaches [Run.apply_effect]), an [ms_rom] fallback in
-      [RiscvSemantics.ov_read_bytes] so a downgraded page still loads,
-      and a ledger beside [State.vm_noaccess] so [munmap], [mremap],
-      [brk] and the already-rw branch below decline over a downgraded
-      range instead of silently re-exposing it.
+    - PROT_NONE and changes to anonymous ranges that need to retain
+      arbitrary bytes remain unmodeled.  A successful PROT_READ on a
+      reserved image range records [mkProtectRO addr n].  The overlay
+      keeps its bytes, while [ms_ro] blocks process stores and syscall
+      output buffers.  [in_wmem] rejects a repeated downgrade; this
+      branch only handles the first transition.
 
     A range that is NOT fully contained in the tracked mappings is
     [unmodeled] rather than the -ENOMEM Linux returns for a start outside
@@ -184,10 +159,30 @@ Definition mprotect_errnos : list Z := [ENOMEM].
     length the same garbage is a real 0, which is why the [!len] branch
     below does not consult [prot] at all. *)
 
-(** The one [prot] the model can answer for at nonzero length: exactly
-    the rw permissions its anonymous memory already has. *)
+(** The rw [prot] admitted for tracked anonymous memory. *)
 Definition mprotect_modeled_b (prot : word) : bool :=
   Z.eqb (bv_unsigned prot) (PROT_READ + PROT_WRITE).
+
+Definition mprotect_readonly_b (prot : word) : bool :=
+  Z.eqb (bv_unsigned prot) PROT_READ.
+
+(** Only reserved image pages are downgraded.  Requiring no anonymous
+    ownership keeps later munmap and mremap transitions disjoint from the
+    read-only ledger.  Both views must contain every byte before the
+    permission change. *)
+Definition mprotect_readonly_range_b (i : SyscallInput) (m : Model)
+    (addr n : word) : bool :=
+  (bv_unsigned n <=? 65536)%Z
+  && map_contains (vm_reserved (m_vmmaps m)) addr n
+  && region_free (vm_maps (m_vmmaps m)) addr n
+  && match read_bytes_map (in_mem i) addr n with
+     | Some _ => true
+     | None => false
+     end
+  && match read_bytes_map (in_wmem i) addr n with
+     | Some _ => true
+     | None => false
+     end.
 
 (** Both stack-extension modifiers at once — the ONE argument error the
     modeled surface takes from [prot]'s grows bits (mm/mprotect.c:715,
@@ -314,6 +309,15 @@ Definition mprotect_spec (addr len prot : word) : Sys SyscallEffect :=
     else if map_contains (vm_maps h) addr n
             && region_free (vm_noaccess h) addr n then
       ret_only (Z_to_bv 64 0)
+    else unmodeled
+  else if mprotect_readonly_b prot then
+    i <- input ;;
+    m <- get_model ;;
+    let n := Z_to_bv 64 (page_round_up_Z (bv_unsigned len)) in
+    if mprotect_readonly_range_b i m addr n then
+      alt (e <- errno_from mprotect_errnos ;; err_ret e)
+          (pure (mkEffectU (Z_to_bv 64 0) [] [] []
+                    [mkProtectRO addr n] []))
     else unmodeled
   else unmodeled.
 

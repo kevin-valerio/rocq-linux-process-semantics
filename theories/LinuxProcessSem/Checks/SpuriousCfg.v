@@ -92,7 +92,7 @@ Definition getcwd_ms : machine_state := {|
   ms_pc_val := Z_to_bv 64 0x100;
   ms_svc_pending := Some (Z_to_bv 64 17);
   ms_resv := None; ms_fcsr := Z_to_bv 32 0;
-  ms_mem := fun _ => None; ms_rom := fun _ => None |}.
+  ms_mem := fun _ => None; ms_rom := fun _ => None; ms_ro := [] |}.
 
 Definition getcwd_i : SyscallInput := sys_input [] getcwd_ms (Z_to_bv 64 17).
 

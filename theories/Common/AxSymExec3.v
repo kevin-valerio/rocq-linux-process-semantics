@@ -1865,10 +1865,34 @@ Fixpoint log_bytes_lit (log : list sentry) (rb : expr) (rk : Z) (n : nat) : opti
             end
   end.
 
+(** A byte from the newest definite same-base store, including symbolic
+    store values.  Unknown aliasing still stops composition. *)
+Fixpoint log_byte_expr (log : list sentry) (rb : expr) (rk : Z) : option expr :=
+  match log with
+  | [] => None
+  | SE (SA kb kk) w v :: rest =>
+      match rel_lit rb rk 1 kb kk (Z.of_nat w) with
+      | RInside d => Some (mkExt false (Z.to_nat d) 1 v)
+      | RDisjoint => log_byte_expr rest rb rk
+      | _ => None
+      end
+  end.
+
+Fixpoint log_bytes_expr (log : list sentry) (rb : expr) (rk : Z) (n : nat) : option expr :=
+  match n with
+  | O => Some (ELit 0)
+  | S n' =>
+      match log_byte_expr log rb rk, log_bytes_expr log rb (rk + 1) n' with
+      | Some b, Some rest =>
+          Some (EAlu ALU_OR b (EAlu ALU_SLL rest (ELit 8)))
+      | _, _ => None
+      end
+  end.
+
 (** Walk the store log (newest first).  Same base: decide by offsets
     (hit inside one entry, skip if disjoint; a read PARTIALLY overlapping
-    an entry is composed bytewise from literal entries of the log
-    ([log_bytes_lit]), else stuck).  Other
+    an entry is composed bytewise from definite same-base entries of
+    the log.  Other
     base: consume a hint — [true] (or no hint) = assume disjoint (emit
     [SCDisj]), [false] = stuck (aliasing through a different spelling is
     not modelled: pin the register to the canonical spelling instead). *)
@@ -1880,10 +1904,15 @@ Fixpoint log_lookup (kn : list kentry) (log : list sentry) (rb : expr) (rk : Z) 
       match rel_lit rb rk (Z.of_nat n) kb kk (Z.of_nat w) with
       | RInside d => LHit (mkExt sx (Z.to_nat d) n v) acc hints
       | RDisjoint => log_lookup kn rest rb rk n sx hints acc
-      | RPartial => match log_bytes_lit log rb rk n with
-                    | Some bs => LHit (lit_of_bytes sx n bs) acc hints
-                    | None => LStuck
-                    end
+      | RPartial =>
+          match log_bytes_lit log rb rk n with
+          | Some bs => LHit (lit_of_bytes sx n bs) acc hints
+          | None =>
+              match log_bytes_expr log rb rk n with
+              | Some e => LHit (mkExt sx 0 n e) acc hints
+              | None => LStuck
+              end
+          end
       | RUnknown =>
           if ranges_apart kn rb rk (Z.of_nat n) kb kk (Z.of_nat w)
           then log_lookup kn rest rb rk n sx hints acc
@@ -1965,6 +1994,38 @@ Fixpoint know_bytes_lit (segs : list Segment) (kn : list kentry) (rb : expr) (rk
             | Some b, Some r => Some (b :: r)
             | _, _ => None
             end
+  end.
+
+(** Compose a literal read from the newest definite log byte, or from
+    literal base knowledge when no logged store covers that byte. *)
+Fixpoint log_base_byte_lit (segs : list Segment) (kn : list kentry)
+    (log : list sentry) (rb : expr) (rk : Z) : option Z :=
+  match log with
+  | [] => know_byte_lit segs kn rb rk
+  | SE (SA kb kk) w v :: rest =>
+      match rel_lit rb rk 1 kb kk (Z.of_nat w) with
+      | RInside d => match v with
+                     | ELit z => Some (((z mod two64) / 2 ^ (8 * d)) mod 256)%Z
+                     | _ => None
+                     end
+      | RDisjoint => log_base_byte_lit segs kn rest rb rk
+      | RUnknown =>
+          if ranges_apart (facts_of kn) rb rk 1 kb kk (Z.of_nat w)
+          then log_base_byte_lit segs kn rest rb rk else None
+      | RPartial => None
+      end
+  end.
+
+Fixpoint log_base_bytes_lit (segs : list Segment) (kn : list kentry)
+    (log : list sentry) (rb : expr) (rk : Z) (n : nat) : option (list Z) :=
+  match n with
+  | O => Some []
+  | S n' =>
+      match log_base_byte_lit segs kn log rb rk,
+            log_base_bytes_lit segs kn log rb (rk + 1) n' with
+      | Some b, Some r => Some (b :: r)
+      | _, _ => None
+      end
   end.
 
 (** Consult the knowledge list (order = priority).  For entries with a
@@ -2913,7 +2974,12 @@ Definition sym_read (segs : list Segment) (ss : sym_state) (fk : list kentry) (s
            (a : saddr) (n : nat) (sx' : bool)
   : option (expr * list sidecond * scripts * nat) :=
   match log_lookup fk (s_log ss) (a_base a) (a_off a) n sx' (sc_hints scr) [] with
-  | LStuck => None
+  | LStuck =>
+      match log_base_bytes_lit segs (s_know ss) (s_log ss)
+        (a_base a) (a_off a) n with
+      | Some bs => Some (lit_of_bytes sx' n bs, flat_sc fk a n, scr, s_next ss)
+      | None => None
+      end
   | LHit v scs hints =>
       Some (extK fk v, flat_sc fk a n ++ scs, SCR (sc_dirs scr) (sc_reads scr) hints, s_next ss)
   | LMiss scs hints =>
@@ -2930,25 +2996,25 @@ Definition sym_read (segs : list Segment) (ss : sym_state) (fk : list kentry) (s
       end
   end.
 
-Definition sym_step (segs : list Segment) (i : instr) (ss : sym_state) (scr : scripts) : stepres :=
+Definition sym_step_size (segs : list Segment) (isz : Z) (i : instr) (ss : sym_state) (scr : scripts) : stepres :=
   let g r := sr_get (s_regs ss) r in
   let p := s_pc ss in
   let fk := facts_of (s_know ss) in   (* PERF: the non-memory facts, filtered once per instruction *)
   match i with
-  | OpImm op rd rs imm => SOk (sset ss rd (mkAluK fk op (g rs) (ELit (bv_signed imm))) (p + 4)) [] scr
-  | ShiftImm op rd rs sh => SOk (sset ss rd (mkAluK fk op (g rs) (ELit (bv_unsigned sh))) (p + 4)) [] scr
-  | Op op rd rs1 rs2 => SOk (sset ss rd (mkAluK fk op (g rs1) (g rs2)) (p + 4)) [] scr
-  | OpImm32 rd rs imm => SOk (sset ss rd (mkAluwK fk ALU_ADD (g rs) (ELit (bv_signed imm))) (p + 4)) [] scr
-  | ShiftImm32 op rd rs sh => SOk (sset ss rd (mkAluw op (g rs) (ELit (bv_unsigned sh))) (p + 4)) [] scr
-  | Op32 op rd rs1 rs2 => SOk (sset ss rd (mkAluwK fk op (g rs1) (g rs2)) (p + 4)) [] scr
-  | Mul op rd rs1 rs2 => SOk (sset ss rd (mkMdK fk op (g rs1) (g rs2)) (p + 4)) [] scr
-  | Mul32 op rd rs1 rs2 => SOk (sset ss rd (mkMdw op (g rs1) (g rs2)) (p + 4)) [] scr
-  | Lui rd imm => SOk (sset ss rd (ELit (bv_unsigned (Z_to_bv 64 (Z.shiftl (bv_signed imm) 12)))) (p + 4)) [] scr
-  | Auipc rd imm => SOk (sset ss rd (ELit (bv_unsigned (Z_to_bv 64 (Z.shiftl (bv_signed imm) 12 + p)))) (p + 4)) [] scr
-  | Jal rd imm => SOk (sset ss rd (ELit (p + 4)) (bv_unsigned (Z_to_bv 64 (p + bv_signed imm)))) [] scr
+  | OpImm op rd rs imm => SOk (sset ss rd (mkAluK fk op (g rs) (ELit (bv_signed imm))) (p + isz)) [] scr
+  | ShiftImm op rd rs sh => SOk (sset ss rd (mkAluK fk op (g rs) (ELit (bv_unsigned sh))) (p + isz)) [] scr
+  | Op op rd rs1 rs2 => SOk (sset ss rd (mkAluK fk op (g rs1) (g rs2)) (p + isz)) [] scr
+  | OpImm32 rd rs imm => SOk (sset ss rd (mkAluwK fk ALU_ADD (g rs) (ELit (bv_signed imm))) (p + isz)) [] scr
+  | ShiftImm32 op rd rs sh => SOk (sset ss rd (mkAluw op (g rs) (ELit (bv_unsigned sh))) (p + isz)) [] scr
+  | Op32 op rd rs1 rs2 => SOk (sset ss rd (mkAluwK fk op (g rs1) (g rs2)) (p + isz)) [] scr
+  | Mul op rd rs1 rs2 => SOk (sset ss rd (mkMdK fk op (g rs1) (g rs2)) (p + isz)) [] scr
+  | Mul32 op rd rs1 rs2 => SOk (sset ss rd (mkMdw op (g rs1) (g rs2)) (p + isz)) [] scr
+  | Lui rd imm => SOk (sset ss rd (ELit (bv_unsigned (Z_to_bv 64 (Z.shiftl (bv_signed imm) 12)))) (p + isz)) [] scr
+  | Auipc rd imm => SOk (sset ss rd (ELit (bv_unsigned (Z_to_bv 64 (Z.shiftl (bv_signed imm) 12 + p)))) (p + isz)) [] scr
+  | Jal rd imm => SOk (sset ss rd (ELit (p + isz)) (bv_unsigned (Z_to_bv 64 (p + bv_signed imm)))) [] scr
   | Jalr rd rs1 imm =>
       match conc_expr fk (g rs1) with
-      | ELit z => SOk (sset ss rd (ELit (p + 4)) (Z.land (bv_wrap 64 z + bv_signed imm) (-2) mod 2^64)) [] scr
+      | ELit z => SOk (sset ss rd (ELit (p + isz)) (Z.land (bv_wrap 64 z + bv_signed imm) (-2) mod 2^64)) [] scr
       | _ => SStop
       end
   | Branch c rs1 rs2 imm =>
@@ -2961,17 +3027,17 @@ Definition sym_step (segs : list Segment) (i : instr) (ss : sym_state) (scr : sc
                       | None => enum_branch fk c a b
                       end
             end with
-      | Some t => SOk (sjump ss (if t then tk else p + 4)) [] scr
+      | Some t => SOk (sjump ss (if t then tk else p + isz)) [] scr
       | None =>
           match sc_dirs scr with
           | [] => SStop
           | t :: dirs' =>
-              SOk (sjump ss (if t then tk else p + 4)) [SCBr t c a b]
+              SOk (sjump ss (if t then tk else p + isz)) [SCBr t c a b]
                   (SCR dirs' (sc_reads scr) (sc_hints scr))
           end
       end
-  | Fence _ _ _ _ _ => SOk (sjump ss (p + 4)) [] scr
-  | FenceI _ _ _ => SOk (sjump ss (p + 4)) [] scr
+  | Fence _ _ _ _ _ => SOk (sjump ss (p + isz)) [] scr
+  | FenceI _ _ _ => SOk (sjump ss (p + isz)) [] scr
   | Load sz sx rd rs imm =>
       let n := msize_bytes sz in
       (* the ISA's [Load SZ8 true] is [ld] (no extension needed); treat 8-byte as unsigned slice *)
@@ -2980,7 +3046,7 @@ Definition sym_step (segs : list Segment) (i : instr) (ss : sym_state) (scr : sc
       match sym_read segs ss fk scr a n sx' with
       | None => SStop
       | Some (v, scs, scr', nx') =>
-          SOk (SSR (p + 4) (if bv_eqb rd 0 then s_regs ss else sr_upd (s_regs ss) (ridx rd) v)
+          SOk (SSR (p + isz) (if bv_eqb rd 0 then s_regs ss else sr_upd (s_regs ss) (ridx rd) v)
                    (s_log ss) (s_know ss) nx' (s_resv ss)) scs scr'
       end
   | Store sz rs1 rs2 imm =>
@@ -2989,7 +3055,7 @@ Definition sym_step (segs : list Segment) (i : instr) (ss : sym_state) (scr : sc
       match resv_inval (s_resv ss) a with
       | None => SStop
       | Some r' =>
-          SOk (SSR (p + 4) (s_regs ss) (SE a n (g rs2) :: s_log ss) (s_know ss) (s_next ss) r')
+          SOk (SSR (p + isz) (s_regs ss) (SE a n (g rs2) :: s_log ss) (s_know ss) (s_next ss) r')
               (flat_sc fk a n ++ storeok_sc fk a n) scr
       end
   (* ---- A extension ---- *)
@@ -3001,7 +3067,7 @@ Definition sym_step (segs : list Segment) (i : instr) (ss : sym_state) (scr : sc
         match sym_read segs ss fk scr a n (amo_sx wd) with
         | None => SStop
         | Some (v, scs, scr', nx') =>
-            SOk (SSR (p + 4) (if bv_eqb rd 0 then s_regs ss else sr_upd (s_regs ss) (ridx rd) v)
+            SOk (SSR (p + isz) (if bv_eqb rd 0 then s_regs ss else sr_upd (s_regs ss) (ridx rd) v)
                      (s_log ss) (s_know ss) nx' (Some a)) scs scr'
         end
       else SStop
@@ -3013,7 +3079,7 @@ Definition sym_step (segs : list Segment) (i : instr) (ss : sym_state) (scr : sc
         match s_resv ss with
         | Some r =>
             if saddr_eqb r a then
-              SOk (SSR (p + 4) (if bv_eqb rd 0 then s_regs ss else sr_upd (s_regs ss) (ridx rd) (ELit 0))
+              SOk (SSR (p + isz) (if bv_eqb rd 0 then s_regs ss else sr_upd (s_regs ss) (ridx rd) (ELit 0))
                        (SE a n (g rs2) :: s_log ss) (s_know ss) (s_next ss) None)
                   (flat_sc fk a n ++ storeok_sc fk a n) scr
             else SStop   (* reservation elsewhere / lost: the failing SC is never needed *)
@@ -3034,7 +3100,7 @@ Definition sym_step (segs : list Segment) (i : instr) (ss : sym_state) (scr : sc
                 match sym_read segs ss fk scr a n (amo_sx wd) with
                 | None => SStop
                 | Some (vold, scs, scr', nx') =>
-                    SOk (SSR (p + 4) (if bv_eqb rd 0 then s_regs ss else sr_upd (s_regs ss) (ridx rd) vold)
+                    SOk (SSR (p + isz) (if bv_eqb rd 0 then s_regs ss else sr_upd (s_regs ss) (ridx rd) vold)
                              (SE a n (amo_newval fk wd aop vold (g rs2)) :: s_log ss) (s_know ss) nx' r')
                         (scs ++ storeok_sc fk a n) scr'
                 end
@@ -3045,6 +3111,9 @@ Definition sym_step (segs : list Segment) (i : instr) (ss : sym_state) (scr : sc
   end.
 
 
+
+Definition sym_step (segs : list Segment) (i : instr) (ss : sym_state) (scr : scripts) : stepres :=
+  sym_step_size segs 4 i ss scr.
 
 (** Syntactic dedup of side conditions (cheap win: a spill slot touched
     ten times yields one obligation). *)
@@ -3083,6 +3152,11 @@ Fixpoint sc_add (news acc : list sidecond) : list sidecond :=
 
 Definition itab : Type := ptree instr.
 Definition itab_lookup (t : itab) (pc : Z) : option instr :=
+  match pc with Zpos p => pt_get t p | _ => None end.
+
+(** Instruction tables that retain the decoded instruction length. *)
+Definition itabC : Type := ptree (instr * Z).
+Definition itabC_lookup (t : itabC) (pc : Z) : option (instr * Z) :=
   match pc with Zpos p => pt_get t p | _ => None end.
 
 (* ######################################################################### *)
@@ -3128,6 +3202,44 @@ Qed.
 Lemma mk_itab_sound : forall lo n, itab_sound (mk_itab lo n).
 Proof.
   intros lo n. apply mk_itab_fuel_sound. intros pc i. unfold itab_lookup.
+  destruct pc; try discriminate. rewrite pt_get_leaf. discriminate.
+Qed.
+
+Definition itabC_entry (pc : Z) : option (instr * Z) :=
+  match fetch_word segs (Z_to_bv 64 pc) with
+  | None => None
+  | Some w => if is_ecall w then None else decode_any w
+  end.
+
+Fixpoint mk_itabC_fuel (n : nat) (pc : Z) (t : itabC) : itabC :=
+  match n with
+  | O => t
+  | S n' => mk_itabC_fuel n' (pc + 2)%Z
+              (match pc, itabC_entry pc with
+               | Zpos p, Some entry => pt_set p entry t
+               | _, _ => t
+               end)
+  end.
+
+(** The halfword addresses at [lo], [lo+2], ... ([n] of them). *)
+Definition mk_itabC (lo : Z) (n : nat) : itabC := mk_itabC_fuel n lo PTLeaf.
+Definition itabC_sound (t : itabC) : Prop :=
+  forall pc entry, itabC_lookup t pc = Some entry -> itabC_entry pc = Some entry.
+
+Lemma mk_itabC_fuel_sound : forall n pc t, itabC_sound t -> itabC_sound (mk_itabC_fuel n pc t).
+Proof.
+  induction n as [|n IH]; intros pc t Ht; cbn; [exact Ht|].
+  apply IH. destruct pc as [|p|p]; try exact Ht.
+  destruct (itabC_entry (Zpos p)) as [entry|] eqn:E; [|exact Ht].
+  intros pc' entry'. unfold itabC_lookup. destruct pc' as [|p'|p']; try discriminate.
+  destruct (Pos.eq_dec p' p) as [->|Hne].
+  - rewrite pt_gss. intros H; injection H as <-. exact E.
+  - rewrite pt_gso by exact Hne. exact (Ht (Zpos p') entry').
+Qed.
+
+Lemma mk_itabC_sound : forall lo n, itabC_sound (mk_itabC lo n).
+Proof.
+  intros lo n. apply mk_itabC_fuel_sound. intros pc entry. unfold itabC_lookup.
   destruct pc; try discriminate. rewrite pt_get_leaf. discriminate.
 Qed.
 
@@ -3222,6 +3334,25 @@ Fixpoint sym_execT_go (t : itab) (fuel : nat) (first : bool) (stops : list Z) (s
 
 Definition sym_execT (t : itab) (fuel : nat) (first : bool) (stops : list Z) (ss : sym_state) : sym_state :=
   sym_execT_go t fuel first stops (clr ss) (clr ss).
+
+Fixpoint sym_execTC_go (t : itabC) (fuel : nat) (first : bool) (stops : list Z) (ss : sym_state) (ck : sym_state)
+  : sym_state :=
+  match fuel with
+  | O => if s_clean ss then ss else ck
+  | S f =>
+      if (negb first && existsb (Z.eqb (s_pc ss)) stops)%bool then (if s_clean ss then ss else ck) else
+      match itabC_lookup t (s_pc ss) with
+      | None => if s_clean ss then ss else ck
+      | Some (i, isz) =>
+          match sym_step_size segs isz i ss scr_nil with
+          | SOk ss' [] _ => sym_execTC_go t f false stops ss' (if s_clean ss' then ss' else ck)
+          | _ => if s_clean ss then ss else ck
+          end
+      end
+  end.
+
+Definition sym_execTC (t : itabC) (fuel : nat) (first : bool) (stops : list Z) (ss : sym_state) : sym_state :=
+  sym_execTC_go t fuel first stops (clr ss) (clr ss).
 
 (* ------------------------------------------------------------------ *)
 (** ** 4c. EXTENSION MODE: fresh variables inside a block           *)
@@ -3399,6 +3530,15 @@ Definition sym_stepX (K : nat) (i : instr) (ss : sym_state) (scr : scripts) : st
   | SStop => SStop
   end.
 
+Definition sym_stepX_size (K : nat) (isz : Z) (i : instr) (ss : sym_state) (scr : scripts) : stepres :=
+  match sym_step_size segs isz i ss scr with
+  | SOk ss' scs scr' =>
+      if Nat.leb (s_next ss) (s_next ss')
+      then SOk (cap_rd K i ss') (x_filter ss ss' scs) scr'
+      else SStop
+  | SStop => SStop
+  end.
+
 (** The strict drivers in extension mode ([K]: register cap, 0 = none). *)
 Fixpoint sym_execSX_go (K : nat) (fuel : nat) (first : bool) (stops : list Z) (ss : sym_state) (ck : sym_state)
   : sym_state :=
@@ -3443,6 +3583,25 @@ Fixpoint sym_execTX_go (t : itab) (K : nat) (fuel : nat) (first : bool) (stops :
 
 Definition sym_execTX (t : itab) (K : nat) (fuel : nat) (first : bool) (stops : list Z) (ss : sym_state) : sym_state :=
   sym_execTX_go t K fuel first stops (clr ss) (clr ss).
+
+Fixpoint sym_execTXC_go (t : itabC) (K : nat) (fuel : nat) (first : bool) (stops : list Z) (ss : sym_state) (ck : sym_state)
+  : sym_state :=
+  match fuel with
+  | O => if s_clean ss then ss else ck
+  | S f =>
+      if (negb first && existsb (Z.eqb (s_pc ss)) stops)%bool then (if s_clean ss then ss else ck) else
+      match itabC_lookup t (s_pc ss) with
+      | None => if s_clean ss then ss else ck
+      | Some (i, isz) =>
+          match sym_stepX_size K isz i ss scr_nil with
+          | SOk ss' [] _ => sym_execTXC_go t K f false stops ss' (if s_clean ss' then ss' else ck)
+          | _ => if s_clean ss then ss else ck
+          end
+      end
+  end.
+
+Definition sym_execTXC (t : itabC) (K : nat) (fuel : nat) (first : bool) (stops : list Z) (ss : sym_state) : sym_state :=
+  sym_execTXC_go t K fuel first stops (clr ss) (clr ss).
 
 
 

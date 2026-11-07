@@ -428,10 +428,12 @@ Qed.
 
 Lemma store_ok_wbuf : forall segs ms (buf cnt : word),
   store_ok segs (ms_mem ms) buf (word_to_nat cnt) = true ->
+  ms_ro ms = [] ->
   exists w, read_bytes_map (ms_writable_byte segs ms) buf cnt = Some w.
 Proof.
-  intros segs ms buf cnt H.
+  intros segs ms buf cnt H Hro.
   rewrite read_bytes_map_eq. unfold ms_writable_byte.
+  rewrite Hro. cbn [ro_free forallb].
   apply store_ok_read_aux. exact H.
 Qed.
 
@@ -453,12 +455,13 @@ Qed.
     effort at the call site, which is the point. *)
 Lemma store_grant_wbuf : forall segs ms (b l buf cnt : word),
   store_grant_ok segs (ms_mem ms) b l ->
+  ms_ro ms = [] ->
   bv_unsigned b <= bv_unsigned buf ->
   bv_unsigned buf + bv_unsigned cnt <= bv_unsigned b + bv_unsigned l ->
   exists w, read_bytes_map (ms_writable_byte segs ms) buf cnt = Some w.
 Proof.
-  intros segs ms b l buf cnt Hg Hlo Hhi.
-  apply store_ok_wbuf, Hg; rewrite ?of_nat_word_to_nat; lia.
+  intros segs ms b l buf cnt Hg Hro Hlo Hhi.
+  apply store_ok_wbuf; [apply Hg; rewrite ?of_nat_word_to_nat; lia|exact Hro].
 Qed.
 
 (** The same in [Common/Footprint]'s vocabulary, so a binary that has
@@ -467,14 +470,15 @@ Qed.
     and monotone in the bump pointer through [heap_rg_bump]. *)
 Lemma heap_rg_wbuf : forall segs ms (b l buf cnt : word) (cur : Z),
   store_grant_ok segs (ms_mem ms) b l ->
+  ms_ro ms = [] ->
   cur <= bv_unsigned b + bv_unsigned l - bv_unsigned b ->
   covers (heap_rg b cur) buf (word_to_nat cnt) ->
   exists w, read_bytes_map (ms_writable_byte segs ms) buf cnt = Some w.
 Proof.
-  intros segs ms b l buf cnt cur Hg Hcur Hc.
+  intros segs ms b l buf cnt cur Hg Hro Hcur Hc.
   destruct Hc as [Hlo Hhi]. cbn [heap_rg rg_lo rg_hi] in Hlo, Hhi.
   rewrite of_nat_word_to_nat in Hhi.
-  eapply store_grant_wbuf; [exact Hg | lia | lia].
+  eapply store_grant_wbuf; [exact Hg | exact Hro | lia | lia].
 Qed.
 
 (** A grant straight out of the [mmap]/[brk] step, before any store has
@@ -484,13 +488,14 @@ Qed.
     [store_grant_ok] conjunct is INITIALIZED from. *)
 Lemma zmem_wbuf : forall segs ms m (b l buf cnt : word),
   mem_grows (zmem m b l) (ms_mem ms) ->
+  ms_ro ms = [] ->
   bv_unsigned b + bv_unsigned l <= 2 ^ 64 ->
   bv_unsigned b <= bv_unsigned buf ->
   bv_unsigned buf + bv_unsigned cnt <= bv_unsigned b + bv_unsigned l ->
   exists w, read_bytes_map (ms_writable_byte segs ms) buf cnt = Some w.
 Proof.
-  intros segs ms m b l buf cnt Hgr Hnw Hlo Hhi.
-  eapply store_grant_wbuf; [ | exact Hlo | exact Hhi ].
+  intros segs ms m b l buf cnt Hgr Hro Hnw Hlo Hhi.
+  eapply store_grant_wbuf; [ | exact Hro | exact Hlo | exact Hhi ].
   eapply store_grant_mono; [exact Hgr|]. apply store_grant_zmem. exact Hnw.
 Qed.
 
@@ -502,14 +507,15 @@ Qed.
     [StreamSim.wseg_ok] could only offer over a static segment. *)
 Example drain_buffer_in_grant : forall segs ms m (b l buf cnt : word) a bs,
   ms_mem ms = wbytes (zmem m b l) a bs ->
+  ms_ro ms = [] ->
   bv_unsigned b + bv_unsigned l <= 2 ^ 64 ->
   bv_unsigned b <= bv_unsigned buf ->
   bv_unsigned buf + bv_unsigned cnt <= bv_unsigned b + bv_unsigned l ->
   exists w, read_bytes_map (ms_writable_byte segs ms) buf cnt = Some w.
 Proof.
-  intros segs ms m b l buf cnt a bs Hm Hnw Hlo Hhi.
+  intros segs ms m b l buf cnt a bs Hm Hro Hnw Hlo Hhi.
   eapply zmem_wbuf;
-    [ rewrite Hm; apply wbytes_grows | exact Hnw | exact Hlo | exact Hhi ].
+    [ rewrite Hm; apply wbytes_grows | exact Hro | exact Hnw | exact Hlo | exact Hhi ].
 Qed.
 
 (** ** Dispatch

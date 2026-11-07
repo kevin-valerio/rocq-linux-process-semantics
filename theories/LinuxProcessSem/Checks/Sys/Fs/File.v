@@ -60,7 +60,7 @@ Definition check_dup (oldfd : word) (eff : SyscallEffect) (m : Model)
   | Some e =>
       if negb (dup_modeled_entry e) then CheckUnmodeled
       else check_dup_result eff m
-             (fun fd => with_fds (fd_insert (m_fds m) fd e) m)
+             (fun fd => dup_channel_model fd e false m)
   end.
 
 Definition check_dup3 (oldfd newfd flags : word) (eff : SyscallEffect)
@@ -79,11 +79,11 @@ Definition check_dup3 (oldfd newfd flags : word) (eff : SyscallEffect)
           | None =>
               if Z.ltb (bv_unsigned newfd) NR_OPEN_DEFAULT
               then check_ret_only eff newfd
-                     (with_fds (fd_insert (m_fds m) newfd e) m) []
+                     (dup_channel_model newfd e (dup3_cloexec flags) m) []
               else CheckUnmodeled
           | Some _ =>
               check_ret_only eff newfd
-                (with_fds (fd_insert (m_fds m) newfd e) m) []
+                (dup_channel_model newfd e (dup3_cloexec flags) m) []
           end
     end.
 

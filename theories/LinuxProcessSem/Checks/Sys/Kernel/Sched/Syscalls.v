@@ -16,61 +16,163 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Sys Require Export Prelude.
 
 (** [sched_getaffinity] (123): -EINVAL on a length either kernel gate
-    refuses, and [CheckUnmodeled] on every length they let through.
-    Mirrors [Kernel.Sched.Syscalls.sched_getaffinity_spec] branch for
-    branch — read that spec for why neither [pid] nor [user_mask_ptr] is
-    an argument here either, and for what the decline costs. *)
-Definition check_sched_getaffinity (len : word) (eff : SyscallEffect)
+    refuses; an eight-byte self mask on the modeled success path. *)
+Definition check_sched_getaffinity (i : SyscallInput) (len : word)
+    (eff : SyscallEffect)
     (m : Model) : check_result :=
   if affinity_len_einval_b len
   then check_ret_only eff (errno_ret EINVAL) m []
-  else CheckUnmodeled.
+  else
+  let pid := in_arg i 0 in
+  let ptr := in_arg i 2 in
+  if negb (sched_targets_self_b pid m) then CheckUnmodeled else
+  if negb (access_okb ptr 8) then CheckUnmodeled else
+  match read_bytes_map (in_wmem i) ptr (Z_to_bv 64 8) with
+  | None => CheckUnmodeled
+  | Some _ =>
+      if negb (affinity_size_ready_b len m) then CheckUnmodeled else
+      if bv_eqb (eff_ret eff) (errno_ret ENOMEM)
+      then check_ret_only eff (errno_ret ENOMEM) m [] else
+      match eff with
+      | mkEffectU r [(a, bs)] [] [] [] [] =>
+          if bv_eqb r (Z_to_bv 64 8) && bv_eqb a ptr
+             && Nat.eqb (length bs) 8
+          then CheckOk (affinity_after_success m) []
+          else CheckReject
+      | _ => CheckReject
+      end
+  end.
 
-Lemma check_sched_getaffinity_sound_ok : forall len eff m m' evs i,
-  check_sched_getaffinity len eff m = CheckOk m' evs ->
+Lemma check_sched_getaffinity_sound_ok : forall i len eff m m' evs,
+  check_sched_getaffinity i len eff m = CheckOk m' evs ->
   sched_getaffinity_spec len i m (Ok eff m' evs).
 Proof.
-  intros len eff m m' evs i H.
+  intros i len eff m m' evs H.
   unfold check_sched_getaffinity in H. unfold sched_getaffinity_spec.
-  destruct (affinity_len_einval_b len) eqn:Hlen; [|discriminate].
-  apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
-  unfold err_ret, ret_only. apply pure_ok.
+  destruct (affinity_len_einval_b len) eqn:Hlen.
+  { apply check_ret_only_ok_iff in H. destruct H as (-> & -> & ->).
+    unfold err_ret, ret_only. apply pure_ok. }
+  cbv iota.
+  destruct (negb (sched_targets_self_b (in_arg i 0) m)) eqn:Hself;
+    [discriminate|].
+  destruct (negb (access_okb (in_arg i 2) 8)) eqn:Hacc;
+    [discriminate|].
+  destruct (read_bytes_map (in_wmem i) (in_arg i 2) (Z_to_bv 64 8))
+    as [dst|] eqn:Hdst; [|discriminate].
+  destruct (negb (affinity_size_ready_b len m)) eqn:Hready;
+    [discriminate|].
+  destruct (bv_eqb (eff_ret eff) (errno_ret ENOMEM)) eqn:Henomem.
+  { apply check_ret_only_ok_iff in H as (-> & -> & ->).
+    eapply bind_ok0; [apply input_ok|]. cbv beta.
+    eapply bind_ok0; [apply get_model_ok|]. cbv beta.
+    rewrite Hself, Hacc, Hdst, Hready. cbv iota.
+    apply alt_l. unfold err_ret, ret_only. apply pure_ok. }
+  destruct eff as [r ws zs us cs copyins].
+  destruct ws as [|[a bs] ws']; [discriminate|].
+  destruct ws' as [|? ?]; [|discriminate].
+  destruct zs as [|? ?]; [|discriminate].
+  destruct us as [|? ?]; [|discriminate].
+  destruct cs as [|? ?]; [|discriminate].
+  destruct copyins as [|? ?]; [|discriminate].
+  destruct (bv_eqb r (Z_to_bv 64 8) && bv_eqb a (in_arg i 2)
+            && Nat.eqb (length bs) 8) eqn:Hok; [|discriminate].
+  inversion H; clear H; subst.
+  apply andb_true_iff in Hok as [Hok1 Hbs].
+  apply andb_true_iff in Hok1 as [Hr Ha].
+  apply bv_eqb_eq in Hr. apply bv_eqb_eq in Ha.
+  apply Nat.eqb_eq in Hbs. subst.
+  eapply bind_ok0; [apply input_ok|]. cbv beta.
+  eapply bind_ok0; [apply get_model_ok|]. cbv beta.
+  rewrite Hself, Hacc, Hdst, Hready. cbv iota.
+  apply alt_r.
+  eapply bind_ok0; [apply (choose_ok _ bs); exact Hbs|].
+  eapply bind_ok0; [apply modify_ok|]. apply pure_ok.
 Qed.
 
-(** The one decline is every length the gates let through: the answer
-    there depends on [nr_cpu_ids] and [cpumask_size()], which this model
-    does not carry. *)
-Lemma check_sched_getaffinity_sound_unmodeled : forall len eff m i,
-  check_sched_getaffinity len eff m = CheckUnmodeled ->
+Lemma check_sched_getaffinity_sound_unmodeled : forall i len eff m,
+  check_sched_getaffinity i len eff m = CheckUnmodeled ->
   sched_getaffinity_spec len i m Unmodeled.
 Proof.
-  intros len eff m i H.
+  intros i len eff m H.
   unfold check_sched_getaffinity in H. unfold sched_getaffinity_spec.
   destruct (affinity_len_einval_b len) eqn:Hlen.
   - now apply check_ret_only_no_unmodeled in H.
-  - apply unmodeled_intro.
+  - cbv iota.
+    eapply bind_unmodeled2; [apply input_ok|]. cbv beta.
+    eapply bind_unmodeled2; [apply get_model_ok|]. cbv beta.
+    destruct (negb (sched_targets_self_b (in_arg i 0) m)) eqn:Hself;
+      cbv iota; [apply unmodeled_intro|].
+    destruct (negb (access_okb (in_arg i 2) 8)) eqn:Hacc;
+      cbv iota; [apply unmodeled_intro|].
+    destruct (read_bytes_map (in_wmem i) (in_arg i 2) (Z_to_bv 64 8))
+      as [dst|] eqn:Hdst; cbv iota; [|apply unmodeled_intro].
+    destruct (negb (affinity_size_ready_b len m)) eqn:Hready;
+      cbv iota; [apply unmodeled_intro|].
+    destruct (bv_eqb (eff_ret eff) (errno_ret ENOMEM));
+      [now apply check_ret_only_no_unmodeled in H|].
+    exfalso.
+    destruct eff as [r ws zs us cs copyins].
+    destruct ws as [|[a bs] ws']; [discriminate|].
+    destruct ws' as [|? ?]; [|discriminate].
+    destruct zs as [|? ?]; [|discriminate].
+    destruct us as [|? ?]; [|discriminate].
+    destruct cs as [|? ?]; [|discriminate].
+    destruct copyins as [|? ?]; [|discriminate].
+    destruct (bv_eqb r (Z_to_bv 64 8) && bv_eqb a (in_arg i 2)
+              && Nat.eqb (length bs) 8); discriminate.
 Qed.
 
-Lemma check_sched_getaffinity_complete_ok : forall len eff m m' evs i,
+Lemma check_sched_getaffinity_complete_ok : forall i len eff m m' evs,
   sched_getaffinity_spec len i m (Ok eff m' evs) ->
-  check_sched_getaffinity len eff m = CheckOk m' evs.
+  check_sched_getaffinity i len eff m = CheckOk m' evs.
 Proof.
-  intros len eff m m' evs i H.
-  unfold sched_getaffinity_spec in H. unfold check_sched_getaffinity. sys_unfold.
+  intros i len eff m m' evs H.
+  unfold sched_getaffinity_spec in H. unfold check_sched_getaffinity.
+  destruct (affinity_len_einval_b len) eqn:Hlen.
+  { cbv iota in H. unfold err_ret, ret_only in H. inversion H; subst.
+    now apply check_ret_only_ok_iff. }
   cbv iota in H.
-  destruct (affinity_len_einval_b len) eqn:Hlen; hall Hlen; inv_ok.
-  cbn; try rewrite bv_eqb_refl; try rewrite Z.eqb_refl; reflexivity.
+  apply bind_input_model_inv in H.
+  destruct (negb (sched_targets_self_b (in_arg i 0) m)) eqn:Hself;
+    cbv iota in H; [discriminate|].
+  destruct (negb (access_okb (in_arg i 2) 8)) eqn:Hacc;
+    cbv iota in H; [discriminate|].
+  destruct (read_bytes_map (in_wmem i) (in_arg i 2) (Z_to_bv 64 8))
+    as [dst|] eqn:Hdst; cbv iota in H; [|discriminate].
+  destruct (negb (affinity_size_ready_b len m)) eqn:Hready;
+    cbv iota in H; [discriminate|].
+  unfold alt in H. destruct H as [H|H].
+  - unfold err_ret, ret_only, pure in H. inversion H; subst.
+    cbv iota. rewrite bv_eqb_refl.
+    now apply check_ret_only_ok_iff.
+  - unfold bind, choose, modify, pure in H. inv_ok.
+    cbv iota.
+    change (bv_eqb (Z_to_bv 64 8) (errno_ret ENOMEM)) with false.
+    rewrite !bv_eqb_refl, H, Nat.eqb_refl.
+    reflexivity.
 Qed.
 
-Lemma check_sched_getaffinity_complete_unmodeled : forall len m i eff,
+Lemma check_sched_getaffinity_complete_unmodeled : forall i len m eff,
   sched_getaffinity_spec len i m Unmodeled ->
-  check_sched_getaffinity len eff m = CheckUnmodeled.
+  check_sched_getaffinity i len eff m = CheckUnmodeled.
 Proof.
-  intros len m i eff H.
-  unfold sched_getaffinity_spec in H. unfold check_sched_getaffinity. sys_unfold.
+  intros i len m eff H.
+  unfold sched_getaffinity_spec in H. unfold check_sched_getaffinity.
+  destruct (affinity_len_einval_b len) eqn:Hlen.
+  { cbv iota in H. unfold err_ret, ret_only in H. discriminate H. }
   cbv iota in H.
-  destruct (affinity_len_einval_b len) eqn:Hlen; hall Hlen; inv_ok;
-    first [reflexivity | discriminate].
+  apply bind_input_model_inv in H.
+  destruct (negb (sched_targets_self_b (in_arg i 0) m)) eqn:Hself;
+    cbv iota in H; [reflexivity|].
+  destruct (negb (access_okb (in_arg i 2) 8)) eqn:Hacc;
+    cbv iota in H; [reflexivity|].
+  destruct (read_bytes_map (in_wmem i) (in_arg i 2) (Z_to_bv 64 8))
+    as [dst|] eqn:Hdst; cbv iota in H; [|reflexivity].
+  destruct (negb (affinity_size_ready_b len m)) eqn:Hready;
+    cbv iota in H; [reflexivity|].
+  unfold alt in H. destruct H as [H|H].
+  - unfold err_ret, ret_only, pure in H. discriminate H.
+  - unfold bind, choose, modify, pure in H. inv_ok.
 Qed.
 
 (** [sched_setscheduler] (119).  Mirrors

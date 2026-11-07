@@ -16,12 +16,44 @@ Open Scope bv_scope.
 From LinuxProcessSemantics.LinuxProcessSem.Checks.Witness Require Export
   Prelude.
 
-(** The spec is deterministic — no [choose], no [alt] — so the witness is
-    its arm structure read as a function. *)
+Definition ss_oldstack_witness_bytes (autodisarm : bool) : list byte :=
+  repeat 0 8 ++ ss_oldstack_flags_bytes autodisarm ++ repeat 0 12.
+
+Lemma ss_oldstack_witness_shape : forall bit,
+  ss_oldstack_shape bit (ss_oldstack_witness_bytes bit).
+Proof. intros []; vm_compute; repeat split; reflexivity. Qed.
+
+Definition ss_oldstack_witness (uoss : word) (bit : bool) (i : SyscallInput)
+    (m : Model) : outcome SyscallEffect :=
+  if negb (access_okb uoss SIGALTSTACK_BYTES)
+  then ret_outcome (errno_ret EFAULT) m
+  else match read_bytes_map (in_wmem i) uoss (Z_to_bv 64 SIGALTSTACK_BYTES) with
+       | None => Unmodeled
+       | Some _ => Ok (mkEffect (Z_to_bv 64 0)
+                              [(uoss, ss_oldstack_witness_bytes bit)] []) m []
+       end.
+
+Lemma ss_oldstack_witness_ok : forall uoss bit i m,
+  ss_oldstack_spec uoss bit i m (ss_oldstack_witness uoss bit i m).
+Proof.
+  intros. unfold ss_oldstack_spec, ss_oldstack_witness.
+  destruct (negb (access_okb uoss SIGALTSTACK_BYTES)); cbv iota.
+  { unfold err_ret, ret_only, ret_outcome. apply pure_ok. }
+  eapply bind_step; [apply input_ok|]. cbv beta.
+  destruct (read_bytes_map (in_wmem i) uoss (Z_to_bv 64 SIGALTSTACK_BYTES));
+    cbv iota.
+  2:{ apply unmodeled_intro. }
+  eapply bind_step; [apply (choose_ok _ (ss_oldstack_witness_bytes bit));
+                     apply ss_oldstack_witness_shape|].
+  apply pure_ok.
+Qed.
+
 Definition sigaltstack_witness (uss uoss : word) (i : SyscallInput)
     (m : Model) : outcome SyscallEffect :=
   if m_sigaltstack_installed m then Unmodeled
-  else if negb (w_is0 uoss) then Unmodeled
+  else if negb (w_is0 uoss) then
+    if negb (w_is0 uss) then Unmodeled
+    else ss_oldstack_witness uoss (m_sigaltstack_autodisarm m) i m
   else if w_is0 uss then ret_outcome (Z_to_bv 64 0) m
   else
     match sigaltstack_at (in_mem i) uss with
@@ -30,12 +62,16 @@ Definition sigaltstack_witness (uss uoss : word) (i : SyscallInput)
         if negb (ss_mode_ok (ss_flags_of bs))
         then ret_outcome (errno_ret EINVAL) m
         else if ss_disabling (ss_flags_of bs)
-        then ret_outcome (Z_to_bv 64 0) m
+        then ret_outcome (Z_to_bv 64 0)
+               (with_sigaltstack_autodisarm (ss_autodisarm_set (ss_flags_of bs)) m)
         else if (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool
         then Unmodeled
         else if (bv_unsigned (ss_size_of bs) <? MINSIGSTKSZ)%Z
         then ret_outcome (errno_ret ENOMEM) m
-        else ret_outcome (Z_to_bv 64 0) (with_sigaltstack_installed m)
+        else ret_outcome (Z_to_bv 64 0)
+               (with_sigaltstack_installed
+                  (with_sigaltstack_autodisarm
+                     (ss_autodisarm_set (ss_flags_of bs)) m))
     end.
 
 Lemma sigaltstack_witness_ok : forall uss uoss i m,
@@ -46,7 +82,9 @@ Proof.
   destruct (m_sigaltstack_installed m) eqn:Hw; cbv beta iota.
   { apply unmodeled_intro. }
   destruct (negb (w_is0 uoss)) eqn:Ho; cbv beta iota.
-  { apply unmodeled_intro. }
+  { destruct (negb (w_is0 uss)) eqn:Hu; cbv beta iota.
+    - apply unmodeled_intro.
+    - apply ss_oldstack_witness_ok. }
   destruct (w_is0 uss) eqn:Hu; cbv beta iota.
   { unfold ret_only, ret_outcome. apply pure_ok. }
   eapply bind_step; [apply input_ok|]. cbv beta.
@@ -55,7 +93,8 @@ Proof.
   destruct (negb (ss_mode_ok (ss_flags_of bs))) eqn:Hmode; cbv beta iota.
   { unfold err_ret, ret_only, ret_outcome. apply pure_ok. }
   destruct (ss_disabling (ss_flags_of bs)) eqn:Hdis; cbv beta iota.
-  { unfold ret_outcome, ret_only. apply pure_ok. }
+  { unfold ret_outcome, ret_only.
+    eapply bind_step; [apply modify_ok|]. apply pure_ok. }
   destruct (w_is0 (ss_sp_of bs) && w_is0 (ss_size_of bs))%bool eqn:Hzero;
     cbv beta iota.
   { apply unmodeled_intro. }
@@ -63,6 +102,7 @@ Proof.
     cbv beta iota.
   { unfold err_ret, ret_only, ret_outcome. apply pure_ok. }
   unfold ret_outcome. eapply bind_step; [apply modify_ok|].
+  eapply bind_step; [apply modify_ok|].
   unfold ret_only. apply pure_ok.
 Qed.
 

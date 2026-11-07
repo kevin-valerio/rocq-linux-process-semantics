@@ -11,8 +11,8 @@
 
     What is here: (a) an unknown cmd on a closed fd and (d) F_GETFL on
     a socket, each with the other answer as its reject twin; (b) fcntl
-    on fds 0 and 1, channels whose flag words come from the environment
-    and are not the model's to assert; and (c) the exact boundary of the
+    on fds 0 and 1, whose status words come from the declared process
+    input; and (c) the exact boundary of the
     F_SETFL mask, which needs two neighbouring flag words compared
     against each other.
 
@@ -34,7 +34,8 @@ From LinuxProcessSemantics.LinuxProcessSem.Checks.Cases Require Export
   Prelude Fs.ReadWrite.
 
 Definition fcntl_model : Model :=
-  mkModel [(0, FdChannel 0); (1, FdChannel 1); (3, FdFile [102] 0);
+  mkModel [(0, FdChannel 0); (1, FdChannel 1); (2, FdChannel 2);
+           (3, FdFile [102] 0);
            (4, FdFileW [103] 0); (5, FdDir); (6, FdSocket SkFresh);
            (7, FdPipe 0 false); (8, FdPipe 0 true)]
     (mkVmMaps [] [] 0 0 demo_limit) IEof [([102], [104; 105])] None None
@@ -45,7 +46,8 @@ Definition fcntl_model : Model :=
     fd at 4.  Two kinds, one call, one model: that pairing is what makes
     the contrast below a claim about the fd KIND. *)
 Definition fcntl_append_model : Model :=
-  mkModel [(0, FdChannel 0); (1, FdChannel 1); (3, FdFile [102] 0);
+  mkModel [(0, FdChannel 0); (1, FdChannel 1); (2, FdChannel 2);
+           (3, FdFile [102] 0);
            (4, FdFileW [103] 0); (5, FdDir); (6, FdSocket SkFresh);
            (7, FdPipe 0 false); (8, FdPipe 0 true); (10, FdFileA [104] 0)]
     (mkVmMaps [] [] 0 0 demo_limit) IEof [([102], [104; 105])] None None
@@ -101,12 +103,11 @@ Example fcntl_unknown_cmd_on_closed_fd_is_ebadf :
      = CheckReject.
 Proof. split; [check_eq | vm_compute; reflexivity]. Qed.
 
-(** F_SETFD is 0 on a CHANNEL as well as on a file: its return does not
-    depend on the file's status flags, only on the fd resolving. *)
+(** F_SETFD returns 0 and records FD_CLOEXEC on a channel descriptor. *)
 Example fcntl_setfd_on_channel_is_zero :
   check_syscall (mkInput 25 [1; 2; 1; 0; 0; 0] (fun _ => None) (fun _ => None))
     (mkEffect 0 [] []) fcntl_model
-  = CheckOk fcntl_model [].
+  = CheckOk (with_channel_cloexec 1 true fcntl_model) [].
 Proof. check_eq. Qed.
 
 (** ...and the arg is not consulted beyond FD_CLOEXEC, so a garbage one
@@ -328,29 +329,19 @@ Example fcntl_getfl_on_a_socket_fd_is_o_rdwr :
        (mkEffect 32770 [] []) fcntl_model = CheckReject.
 Proof. split; [check_eq|vm_compute; reflexivity]. Qed.
 
-(** ...and the four kinds it still declines, in one place, because the
-    value of an enumerated [Fcntl.getfl_f_flags] is that a reader can
-    check every arm against the argument beside it.  fd 0 is a channel
-    (reason (b)), and the other kinds are here for completeness of the
-    enumeration.
+(** F_GETFL returns the declared status word on channel 0. The file
+    and directory kinds still decline because their flags were not
+    stored when they were opened.
 
     [arg] is 0 throughout and is not part of the question: [do_fcntl]'s
     [case F_GETFL] is [err = filp->f_flags] and never reads [argp] or
     [argi], so the decline is a property of the fd kind alone.
 
-    THE FIFTH CONJUNCT IS THE SOCKET, ANSWERING, and it is here for the
-    reason [fcntl_getfl_declines_on_both_pipe_ends] below states at
-    length: the four above are all [CheckUnmodeled], so on their own
-    they stay green under any change that only ever declines MORE --
-    including [Fcntl.getfl_f_flags] widening its decline past these
-    kinds, which is the change this lemma exists to notice.  Four
-    declines describe where the boundary is; they do not fail when
-    someone moves it.  Pinning the one kind that ANSWERS, over the same
-    model state, is what makes the boundary part of what these conjuncts
-    assert. *)
-Example fcntl_getfl_declines_on_every_other_fd_kind :
+    The channel and socket answers keep the declining arms from
+    becoming a catch-all. *)
+Example fcntl_getfl_on_channel_and_other_fd_kinds :
   check_syscall (mkInput 25 [0; 3; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
-    (mkEffect 0 [] []) fcntl_model = CheckUnmodeled
+    (mkEffect 32768 [] []) fcntl_model = CheckOk fcntl_model []
   /\ check_syscall (mkInput 25 [3; 3; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
        (mkEffect 0 [] []) fcntl_model = CheckUnmodeled
   /\ check_syscall (mkInput 25 [4; 3; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
@@ -360,9 +351,43 @@ Example fcntl_getfl_declines_on_every_other_fd_kind :
   /\ check_syscall (mkInput 25 [6; 3; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
        (mkEffect 2 [] []) fcntl_model = CheckOk fcntl_model [].
 Proof.
-  split; [vm_compute; reflexivity|split; [vm_compute; reflexivity|
+  split; [check_eq|split; [vm_compute; reflexivity|
     split; [vm_compute; reflexivity|split; [vm_compute; reflexivity|check_eq]]]].
 Qed.
+
+(** The declared write-channel word is distinct from stdin's read word. *)
+Example fcntl_getfl_on_stdout :
+  check_syscall (mkInput 25 [1; 3; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
+    (mkEffect 32769 [] []) fcntl_model = CheckOk fcntl_model []
+  /\ check_syscall (mkInput 25 [1; 3; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
+       (mkEffect 32768 [] []) fcntl_model = CheckReject.
+Proof. split; [check_eq|vm_compute; reflexivity]. Qed.
+
+Example fcntl_getfl_on_stderr :
+  check_syscall (mkInput 25 [2; 3; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
+    (mkEffect 32769 [] []) fcntl_model = CheckOk fcntl_model [].
+Proof. check_eq. Qed.
+
+(** F_GETFD observes F_SETFD on the same descriptor. *)
+Example fcntl_getfd_reads_channel_cloexec :
+  check_syscall (mkInput 25 [1; 1; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
+    (mkEffect 0 [] []) fcntl_model = CheckOk fcntl_model []
+  /\ check_syscall (mkInput 25 [1; 1; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
+       (mkEffect 1 [] []) (with_channel_cloexec 1 true fcntl_model)
+       = CheckOk (with_channel_cloexec 1 true fcntl_model) []
+  /\ check_syscall (mkInput 25 [1; 1; 0; 0; 0; 0] (fun _ => None) (fun _ => None))
+       (mkEffect 0 [] []) (with_channel_cloexec 1 true fcntl_model)
+       = CheckReject.
+Proof. repeat split; solve [check_eq | vm_compute; reflexivity]. Qed.
+
+(** Only bit zero of F_SETFD's argument sets FD_CLOEXEC. *)
+Example fcntl_setfd_clears_channel_cloexec :
+  check_syscall (mkInput 25 [1; 2; 2; 0; 0; 0] (fun _ => None) (fun _ => None))
+    (mkEffect 0 [] []) (with_channel_cloexec 1 true fcntl_model)
+  = CheckOk
+      (with_channel_cloexec 1 false
+        (with_channel_cloexec 1 true fcntl_model)) [].
+Proof. check_eq. Qed.
 
 (** F_GETFD is declined on the SAME socket fd that F_GETFL answers.
     The pair is the asymmetry [Fcntl.fcntl_spec]'s comment argues for,

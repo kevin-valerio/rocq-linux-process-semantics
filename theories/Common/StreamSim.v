@@ -182,9 +182,10 @@ Fixpoint wseg_ok (segs : list Segment) (a : word) (n : nat) : bool :=
 
 Lemma wseg_ok_read_aux : forall segs n a ms,
   wseg_ok segs a n = true ->
+  ms_ro ms = [] ->
   exists w, read_bytes_aux (ms_writable_byte segs ms) a n = Some w.
 Proof.
-  intros segs n; induction n as [|n IH]; intros a ms H.
+  intros segs n; induction n as [|n IH]; intros a ms H Hro.
   - exists []. reflexivity.
   - cbn [wseg_ok] in H.
     destruct (find_segment segs (bv_unsigned a) 1) as [seg|] eqn:Hseg; [|discriminate].
@@ -193,10 +194,11 @@ Proof.
     destruct (segment_byte_at (seg_bytes seg)
                 (Z.to_N (bv_unsigned a - Z.of_N (seg_base seg)))) as [b|] eqn:Hb;
       [|discriminate].
-    destruct (IH (a + 1) ms Hrec) as [w Hw].
+    destruct (IH (a + 1) ms Hrec Hro) as [w Hw].
     cbn [read_bytes_aux].
     assert (Hdef : exists b0, ms_writable_byte segs ms a = Some b0).
-    { unfold ms_writable_byte, wview. destruct (ms_mem ms a) as [b'|].
+    { unfold ms_writable_byte. rewrite Hro. cbn [ro_free forallb].
+      unfold wview. destruct (ms_mem ms a) as [b'|].
       - eexists; reflexivity.
       - rewrite Hseg, Hwr, Hb. eexists; reflexivity. }
     destruct Hdef as [b0 Hb0]. rewrite Hb0, Hw. eexists; reflexivity.
@@ -204,10 +206,11 @@ Qed.
 
 Lemma wseg_ok_wdef : forall segs (a len : word) ms,
   wseg_ok segs a (word_to_nat len) = true ->
+  ms_ro ms = [] ->
   exists w, read_bytes_map (ms_writable_byte segs ms) a len = Some w.
 Proof.
-  intros segs a len ms H. rewrite read_bytes_map_eq.
-  apply wseg_ok_read_aux. exact H.
+  intros segs a len ms H Hro. rewrite read_bytes_map_eq.
+  apply wseg_ok_read_aux; assumption.
 Qed.
 
 (* ========================================================================= *)

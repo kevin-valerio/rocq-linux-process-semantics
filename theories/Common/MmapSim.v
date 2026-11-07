@@ -618,7 +618,7 @@ Qed.
 Lemma adv_mmap_grant : forall regs pc sv mem rom a n,
   advance_past_svc (apply_effect
     {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc; ms_svc_pending := sv;
-       ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |}
+       ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (mkEffect a [] [(a, n)]))
   = mkst (regupd regs 10 a) (v_addi pc 4) (zfill a n mem) rom.
 Proof.
@@ -674,7 +674,7 @@ Qed.
 Lemma adv_munmap : forall regs pc sv mem rom a n,
   advance_past_svc (apply_effect
     {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc; ms_svc_pending := sv;
-       ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom |}
+       ms_resv := None; ms_fcsr := fp_csr; ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (mkEffectU (Z_to_bv 64 0) [] [] [(a, n)] [] []))
   = mkst (regupd regs 10 (Z_to_bv 64 0)) (v_addi pc 4) (unfill a n mem) rom.
 Proof.
@@ -785,7 +785,7 @@ Lemma twm_write_ret : forall regs pc mem rom model buf bufs code,
   reg_get regs 10 = Z_to_bv 64 1 ->
   ms_read_bytes {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                    ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-                   ms_mem := mem; ms_rom := rom |}
+                   ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (reg_get regs 11) (reg_get regs 12) = Some buf ->
   (1 <= length buf)%nat ->
   (forall n, (1 <= n)%nat -> (n <= length buf)%nat ->
@@ -793,7 +793,7 @@ Lemma twm_write_ret : forall regs pc mem rom model buf bufs code,
        model (skipn n buf) bufs code) ->
   twm {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
          ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-         ms_mem := mem; ms_rom := rom |}
+         ms_mem := mem; ms_rom := rom; ms_ro := [] |}
       model (buf :: bufs) code.
 Proof.
   intros regs pc mem rom model buf bufs code H17 H10 Hr Hnb Hcont.
@@ -817,7 +817,7 @@ Lemma twm_tail_write_rec : forall regs pc mem rom model rest bufs code,
   reg_get regs 10 = Z_to_bv 64 1 ->
   ms_read_bytes {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                    ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-                   ms_mem := mem; ms_rom := rom |}
+                   ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     (reg_get regs 11) (reg_get regs 12) = Some rest ->
   (1 <= length rest)%nat ->
   (forall n, (1 <= n)%nat -> (n <= length rest)%nat ->
@@ -825,7 +825,7 @@ Lemma twm_tail_write_rec : forall regs pc mem rom model rest bufs code,
        model (skipn n rest) bufs code) ->
   twm_tail {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
               ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-              ms_mem := mem; ms_rom := rom |}
+              ms_mem := mem; ms_rom := rom; ms_ro := [] |}
     model rest bufs code.
 Proof.
   intros regs pc mem rom model rest bufs code H17 H10 Hr Hnb Hcont.
@@ -858,7 +858,7 @@ Lemma twm_munmap_rec : forall regs pc mem rom model bufs code (a nlen : word),
       (munmap_model a (page_round_up nlen) model) bufs code ->
   twm {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
          ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-         ms_mem := mem; ms_rom := rom |}
+         ms_mem := mem; ms_rom := rom; ms_ro := [] |}
       model bufs code.
 Proof.
   intros regs pc mem rom model bufs code a nlen H17 Ha Hn Hal Hlen Hnw Hhas Hcont.
@@ -880,14 +880,14 @@ Lemma twm_exit_coden : forall regs pc mem rom model (c : word),
   reg_get regs 10 = c -> (bv_unsigned c < 256)%Z ->
   twm {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
          ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-         ms_mem := mem; ms_rom := rom |}
+         ms_mem := mem; ms_rom := rom; ms_ro := [] |}
       model [] c.
 Proof.
   intros regs pc mem rom model c H17 H10 Hc.
   assert (E10 : Z_to_bv 5 (10 + Z.of_nat 0) = (10 : reg)) by (apply bv_eq; reflexivity).
   assert (Hg : bv_and (ms_gpr {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
                                  ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-                                 ms_mem := mem; ms_rom := rom |} 0)
+                                 ms_mem := mem; ms_rom := rom; ms_ro := [] |} 0)
                       (Z_to_bv 64 255) = c).
   { unfold ms_gpr. cbn [ms_regs]. rewrite E10, H10.
     apply land_255_small. exact Hc. }
@@ -1211,7 +1211,7 @@ Lemma tmw_mmap_rec : forall regs pc mem rom model bf cf bs cs,
   (exists a, grant_ok (reg_get regs 10) model a (page_round_up_Z (bv_unsigned (reg_get regs 11))) = true) ->
   tmw {| ms_regs := regs; ms_fregs := fp_regs; ms_pc_val := pc;
          ms_svc_pending := Some (getr regs 17); ms_resv := None; ms_fcsr := fp_csr;
-         ms_mem := mem; ms_rom := rom |}
+         ms_mem := mem; ms_rom := rom; ms_ro := [] |}
       model bf cf bs cs.
 Proof.
   intros regs pc mem rom model bf cf bs cs H17 H11 H12 H13 H14 H15

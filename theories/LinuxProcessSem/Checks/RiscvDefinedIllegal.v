@@ -41,8 +41,8 @@ Definition st0 (segs : list Segment) (pc : word) : machine_state := {|
   ms_svc_pending := None;
   ms_resv := None; ms_fcsr := Z_to_bv 32 0;
   ms_mem := fun _ => None;
-  ms_rom := fun _ => None
-|}.
+  ms_rom := fun _ => None;
+  ms_ro := [] |}.
 
 (** A 4-byte executable segment of zeroed memory — the shape a wild jump
     into a zero-filled page lands on, which is exactly why the ISA
